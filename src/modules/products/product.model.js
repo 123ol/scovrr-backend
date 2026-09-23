@@ -71,6 +71,7 @@ productSchema.methods.toCardJSON = function toCardJSON() {
     id: this._id.toString(),
     name: this.name,
     slug: this.slug,
+    categoryId: this.categoryId?._id ? this.categoryId._id.toString() : (this.categoryId ? this.categoryId.toString() : null),
     shortDescription: this.shortDescription,
     priceMinor: this.basePriceMinor,
     compareAtPriceMinor: this.compareAtPriceMinor,

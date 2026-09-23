@@ -16,6 +16,7 @@ const moderationAdminRoutes = require('../moderation/moderation.admin.routes');
 const evidenceAdminRoutes = require('../evidence/evidence.admin.routes');
 const promotionAdminRoutes = require('../promotions/promotion.admin.routes');
 const subscriptionAdminRoutes = require('../subscriptions/subscription.admin.routes');
+const homeSlideAdminRoutes = require('../home-slides/home-slide.admin.routes');
 const { permissionsForAdminRoles } = require('./admin-rbac');
 const controller = require('./admin.controller');
 const { adminListSchema, userListSchema, inviteAdminSchema, updateRolesSchema, adminStatusSchema, userStatusSchema, acceptInvitationSchema } = require('./admin.validation');
@@ -54,5 +55,6 @@ router.use('/moderation', moderationAdminRoutes);
 router.use('/evidence', evidenceAdminRoutes);
 router.use('/discounts', promotionAdminRoutes);
 router.use('/subscriptions', subscriptionAdminRoutes);
+router.use('/home-slides', homeSlideAdminRoutes);
 
 module.exports = router;

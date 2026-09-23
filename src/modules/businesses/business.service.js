@@ -15,6 +15,7 @@ const { InventoryPosition } = require('../inventory/inventory-position.model');
 const { User } = require('../users/user.model');
 const { Follow } = require('../follows/follow.model');
 const { UserFollow } = require('../follows/user-follow.model');
+const { DEFAULT_SELLER_CATEGORIES } = require('../categories/default-categories');
 
 async function uniqueBusinessSlug(name) {
   const base = slugify(name);
@@ -27,7 +28,30 @@ async function uniqueBusinessSlug(name) {
   return candidate;
 }
 
-async function validateCategories(categoryIds, capabilities) {
+async function resolveCategoryIds(categoryIds = [], categorySlugs = []) {
+  if (categorySlugs.length) {
+    const requestedSlugs = [...new Set(categorySlugs)];
+    let categories = await Category.find({ slug: { $in: requestedSlugs }, enabled: true }).select('_id slug');
+    const foundSlugs = new Set(categories.map((category) => category.slug));
+    const defaultsToCreate = DEFAULT_SELLER_CATEGORIES.filter((category) => requestedSlugs.includes(category.slug) && !foundSlugs.has(category.slug));
+    if (defaultsToCreate.length) {
+      await Category.bulkWrite(defaultsToCreate.map((category) => ({
+        updateOne: {
+          filter: { slug: category.slug },
+          update: { $set: { name: category.name, icon: category.icon, description: category.description, type: 'both', parent: null, enabled: true, sortOrder: DEFAULT_SELLER_CATEGORIES.indexOf(category) } },
+          upsert: true
+        }
+      })));
+      categories = await Category.find({ slug: { $in: requestedSlugs }, enabled: true }).select('_id slug');
+    }
+    if (categories.length !== requestedSlugs.length) throw new AppError(400, 'INVALID_BUSINESS_CATEGORIES', 'One or more categories are unavailable');
+    return requestedSlugs.map((slug) => categories.find((category) => category.slug === slug)._id);
+  }
+  return categoryIds || [];
+}
+
+async function validateCategories(categoryIds, capabilities, categorySlugs = []) {
+  categoryIds = await resolveCategoryIds(categoryIds, categorySlugs);
   if (!categoryIds?.length) return [];
   const categories = await Category.find({ _id: { $in: categoryIds }, enabled: true }).select('_id type');
   if (categories.length !== new Set(categoryIds).size) {
@@ -41,7 +65,7 @@ async function validateCategories(categoryIds, capabilities) {
 
 async function createBusiness(userId, input) {
   await assertUserCanActById(userId);
-  const categories = await validateCategories(input.categoryIds, input.capabilities);
+  const categories = await validateCategories(input.categoryIds, input.capabilities, input.categorySlugs);
   // Fail before creating business records when production has not been bootstrapped
   // with the mandatory Free plan. This avoids an orphan business/membership pair.
   await entitlementService.assertFreePlanConfigured();
@@ -57,6 +81,17 @@ async function createBusiness(userId, input) {
     verification: { status: 'draft' }
   });
 
+  await BusinessLocation.create({
+    businessId: business._id,
+    name: 'Main location',
+    address: input.location.address,
+    location: input.location.coordinates ? { type: 'Point', coordinates: input.location.coordinates } : undefined,
+    publiclyVisible: true,
+    pickupAvailable: input.capabilities.includes('marketplace'),
+    primary: true,
+    active: true
+  });
+
   await BusinessMembership.create({
     userId,
     businessId: business._id,
@@ -65,7 +100,19 @@ async function createBusiness(userId, input) {
     status: 'active',
     joinedAt: new Date()
   });
-  await User.findByIdAndUpdate(userId, { $set: { accountType: 'seller' } });
+  await User.findByIdAndUpdate(userId, {
+    $set: {
+      accountType: 'seller',
+      location: {
+        type: 'Point',
+        coordinates: input.location.coordinates,
+        city: input.location.address.city,
+        state: input.location.address.state,
+        country: input.location.address.country,
+        capturedAt: new Date()
+      }
+    }
+  });
   // A seller account cannot follow sellers or users. Remove follows created
   // while this account was a buyer as part of the irreversible upgrade.
   await Promise.all([
@@ -147,6 +194,11 @@ async function listLocations(businessId, includePrivate = false) {
 async function updateLocation(businessId, locationId, input) {
   const location = await BusinessLocation.findOne({ _id: locationId, businessId });
   if (!location) throw new AppError(404, 'LOCATION_NOT_FOUND', 'Business location not found');
+  const willBeActive = input.active === undefined ? location.active : input.active;
+  const existingCoordinates = location.location?.coordinates;
+  if (willBeActive && !input.coordinates && (!Array.isArray(existingCoordinates) || existingCoordinates.length !== 2)) {
+    throw new AppError(400, 'BUSINESS_LOCATION_REQUIRED', 'An active seller location must include valid coordinates');
+  }
   if (input.active === false && location.active) {
     const [futureBookings, activeOrders, inventoryRemaining, staffSchedules] = await Promise.all([
       Booking.exists({ locationId, status: { $in: ['pending_payment', 'requested', 'confirmed', 'upcoming', 'checked_in', 'in_progress'] }, startAt: { $gt: new Date() } }),
@@ -191,6 +243,15 @@ async function updateLocation(businessId, locationId, input) {
 async function submitBusiness(business) {
   if (business.capabilities.length < 1) {
     throw new AppError(400, 'BUSINESS_CAPABILITY_REQUIRED', 'At least one capability is required');
+  }
+  const hasActiveLocation = await BusinessLocation.exists({
+    businessId: business._id,
+    active: true,
+    'location.coordinates.0': { $exists: true },
+    'location.coordinates.1': { $exists: true }
+  });
+  if (!hasActiveLocation) {
+    throw new AppError(400, 'BUSINESS_LOCATION_REQUIRED', 'Add an active shop location before submitting this business');
   }
   if (!['draft', 'rejected'].includes(business.status)) {
     throw new AppError(409, 'BUSINESS_SUBMIT_NOT_AVAILABLE', 'This business cannot be submitted in its current state');

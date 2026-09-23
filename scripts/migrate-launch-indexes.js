@@ -44,6 +44,12 @@ const INDEX_DEFINITIONS = [
     options: {}
   },
   {
+    collection: 'contentpostlikes',
+    name: 'content_post_like_post_user_unique',
+    key: { postId: 1, userId: 1 },
+    options: { unique: true }
+  },
+  {
     collection: 'paymentevents',
     name: 'payment_event_provider_event_unique',
     key: { provider: 1, eventId: 1 },

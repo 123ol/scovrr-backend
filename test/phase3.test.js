@@ -11,6 +11,8 @@ const { checkoutSchema } = require('../src/modules/orders/order.validation');
 const { discoverSchema } = require('../src/modules/discovery/discovery.validation');
 const { orderNumber } = require('../src/modules/orders/order.service');
 const { escapeRegExp } = require('../src/modules/discovery/discovery.service');
+const { availabilityQuerySchema } = require('../src/modules/availability/availability.validation');
+const { assertPostHasContent } = require('../src/modules/content-posts/content-post.service');
 
 const objectId = '507f1f77bcf86cd799439011';
 
@@ -99,6 +101,21 @@ test('discovery location filters normalize city and longitude-first coordinates'
 test('discovery rejects a partial coordinate pair', () => {
   const result = discoverSchema.safeParse({ body: {}, params: {}, query: { latitude: '7.252' } });
   assert.equal(result.success, false);
+});
+
+test('public availability accepts its mounted route contract', () => {
+  const result = availabilityQuerySchema.safeParse({
+    body: {},
+    params: {},
+    query: { serviceId: objectId, from: '2026-09-23', to: '2026-09-24' }
+  });
+  assert.equal(result.success, true);
+});
+
+test('content posts cannot be saved without text or media', () => {
+  assert.throws(() => assertPostHasContent('', []), (error) => error.code === 'CONTENT_POST_EMPTY');
+  assert.doesNotThrow(() => assertPostHasContent('New drop', []));
+  assert.doesNotThrow(() => assertPostHasContent('', [{ url: 'https://cdn.example.com/post.jpg' }]));
 });
 
 test('public order numbers are readable and unique-shaped', () => {

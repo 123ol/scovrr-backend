@@ -43,13 +43,13 @@ async function uniqueProductSlug(business, name) {
 }
 
 async function validateCategory(categoryId, business) {
+  if (!business.capabilities.includes('marketplace')) throw new AppError(400, 'MARKETPLACE_CAPABILITY_REQUIRED', 'This business cannot publish products until marketplace capability is enabled');
   if (!categoryId) return null;
   const category = await Category.findOne({ _id: categoryId, enabled: true }).select('type');
   if (!category) throw new AppError(400, 'INVALID_PRODUCT_CATEGORY', 'The selected category is unavailable');
-  if (category.type !== 'both' && !business.capabilities.includes(category.type === 'product' ? 'marketplace' : 'services')) {
+  if (category.type !== 'both' && category.type !== 'product') {
     throw new AppError(400, 'CATEGORY_CAPABILITY_MISMATCH', 'The category does not match this business capability');
   }
-  if (!business.capabilities.includes('marketplace')) throw new AppError(400, 'MARKETPLACE_CAPABILITY_REQUIRED', 'This business cannot publish products until marketplace capability is enabled');
   return category._id;
 }
 
@@ -205,4 +205,4 @@ async function reviewProduct(productId, adminId, decision, reason) {
   return product;
 }
 
-module.exports = { createProduct, updateProduct, submitProduct, listPublicProducts, getPublicProduct, listBusinessProducts, listAdminProducts, reviewProduct, normalizeVariants, uniqueProductSlug, escapeRegExp };
+module.exports = { createProduct, updateProduct, submitProduct, listPublicProducts, getPublicProduct, listBusinessProducts, listAdminProducts, reviewProduct, normalizeVariants, uniqueProductSlug, escapeRegExp, validateCategory };

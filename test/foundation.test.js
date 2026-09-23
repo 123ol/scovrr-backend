@@ -15,6 +15,21 @@ test('registration schema rejects invalid input with field-level issues', () => 
   assert.ok(result.error.issues.some((issue) => issue.path.join('.') === 'body.email'));
 });
 
+test('seller registration requires a saved location while buyer registration does not', () => {
+  const base = { firstName: 'Zina', lastName: 'User', email: 'zina@example.com', password: 'password123' };
+  assert.equal(registerSchema.safeParse({ body: { ...base, accountType: 'buyer' }, params: {}, query: {} }).success, true);
+  assert.equal(registerSchema.safeParse({ body: { ...base, accountType: 'seller' }, params: {}, query: {} }).success, false);
+  assert.equal(registerSchema.safeParse({
+    body: {
+      ...base,
+      accountType: 'seller',
+      location: { coordinates: [5.195, 7.252], city: 'Akure', state: 'Ondo', country: 'Nigeria', capturedAt: '2026-09-23T10:00:00.000Z' }
+    },
+    params: {},
+    query: {}
+  }).success, true);
+});
+
 test('validation middleware applies normalized request data before the controller', () => {
   const req = {
     body: { firstName: 'Zina', lastName: 'Adebayo', email: 'ZINA@EXAMPLE.COM', password: 'long-enough-password' },

@@ -55,6 +55,9 @@ function publicSession(user, tokens) {
 }
 
 async function register(input, metadata) {
+  if (input.accountType === 'seller' && !input.location) {
+    throw new AppError(400, 'SELLER_LOCATION_REQUIRED', 'Seller accounts require a saved location');
+  }
   const existing = await User.findOne({ email: input.email });
   if (existing) {
     throw new AppError(409, 'EMAIL_ALREADY_REGISTERED', 'An account with this email already exists');
@@ -67,6 +70,7 @@ async function register(input, metadata) {
     email: input.email,
     phone: input.phone || undefined,
     accountType: input.accountType || 'buyer',
+    location: input.location || undefined,
     passwordHash
   });
   await require('../analytics/domain-event.service').queue('USER_REGISTERED', { userId: user._id, actorType: 'user', entityType: 'user', entityId: user._id, metadata: { source: 'API' } }, `user:${user._id}:registered`);
@@ -128,6 +132,9 @@ async function logout(sessionId, userId) {
 async function updateProfile(userId, input) {
   const user = await User.findById(userId);
   if (!user || user.status !== 'active') throw new AppError(403, 'ACCOUNT_UNAVAILABLE', 'This account is not available');
+  if (user.accountType === 'seller' && input.location === null) {
+    throw new AppError(400, 'SELLER_LOCATION_REQUIRED', 'Seller accounts must keep a saved location');
+  }
   if (input.phone !== undefined && input.phone !== null) {
     const existing = await User.findOne({ phone: input.phone, _id: { $ne: userId } }).select('_id');
     if (existing) throw new AppError(409, 'PHONE_ALREADY_REGISTERED', 'This phone number is already in use');
@@ -135,6 +142,7 @@ async function updateProfile(userId, input) {
   if (input.firstName !== undefined) user.firstName = input.firstName;
   if (input.lastName !== undefined) user.lastName = input.lastName;
   if (input.phone !== undefined) user.phone = input.phone || undefined;
+  if (input.location !== undefined) user.location = input.location;
   await user.save();
   return user;
 }

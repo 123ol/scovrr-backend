@@ -12,6 +12,14 @@ const openingInterval = z.object({ start: time, end: time }).refine((value) => v
 const openingHours = z.array(z.object({ dayOfWeek: z.number().int().min(0).max(6), intervals: z.array(openingInterval).max(10).default([]), closed: z.boolean().default(false) })).max(7).refine((items) => new Set(items.map((item) => item.dayOfWeek)).size === items.length, 'Each weekday may only be configured once');
 const specialHours = z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), intervals: z.array(openingInterval).max(10).default([]), closed: z.boolean().default(false), note: z.string().trim().max(300).optional() })).max(370);
 const delivery = z.object({ enabled: z.boolean().default(false), flatFeeMinor: z.number().int().min(0).default(0), freeDeliveryThresholdMinor: z.number().int().min(0).nullable().default(null), estimatedDeliveryMinutes: z.number().int().min(1).max(10_080).default(120) });
+const firstLocation = z.object({
+  address: z.object({
+    city: z.string().trim().min(1).max(120),
+    state: z.string().trim().min(1).max(120),
+    country: z.string().trim().min(1).max(120)
+  }),
+  coordinates: coordinatePair
+});
 
 const createBusinessSchema = z.object({
   body: z.object({
@@ -19,7 +27,9 @@ const createBusinessSchema = z.object({
     description: z.string().trim().max(2_000).optional(),
     capabilities,
     categoryIds: z.array(objectId).max(20).default([]),
-    operatingModel
+    categorySlugs: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
+    operatingModel,
+    location: firstLocation
   }),
   params: z.record(z.never()).default({}),
   query: z.record(z.never()).default({})
@@ -44,7 +54,11 @@ const locationBody = z.object({
     landmark: z.string().trim().max(200).optional()
   }),
   contactPhone: z.string().trim().max(40).optional().nullable(),
-  coordinates: coordinatePair.optional(),
+  // Every seller location participates in nearby discovery and fulfillment.
+  // Coordinates are therefore required when a location is created. The
+  // update schema below remains partial so an existing location can update
+  // its other settings without resubmitting the coordinates.
+  coordinates: coordinatePair,
   timezone: z.string().trim().min(1).max(80).default('Africa/Lagos'),
   openingHours: openingHours.default([]),
   specialHours: specialHours.default([]),

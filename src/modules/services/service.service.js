@@ -119,8 +119,9 @@ async function submitService(businessId, serviceId) {
 
 function searchExpression(search) { return search ? new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').trim(), 'i') : null; }
 
-async function listPublicServices({ q, categoryId, businessSlug, businessIds, page, limit, sort = 'newest' }) {
+async function listPublicServices({ q, categoryId, businessSlug, businessIds, locationIds, page, limit, sort = 'newest' }) {
   const filter = { status: 'active', moderationStatus: 'approved' };
+  const andFilters = [];
   if (categoryId) filter.categoryId = categoryId;
   if (businessSlug) {
     const business = await Business.findOne({ slug: businessSlug, status: 'active', moderationStatus: 'approved' }).select('_id');
@@ -128,8 +129,12 @@ async function listPublicServices({ q, categoryId, businessSlug, businessIds, pa
     filter.businessId = business._id;
   }
   if (businessIds) filter.businessId = { $in: businessIds };
+  if (locationIds) {
+    andFilters.push({ $or: locationIds.length ? [{ locationIds: { $in: locationIds } }, { locationIds: { $size: 0 } }] : [{ locationIds: { $size: 0 } }] });
+  }
   const expression = searchExpression(q);
-  if (expression) filter.$or = [{ name: expression }, { description: expression }, { shortDescription: expression }];
+  if (expression) andFilters.push({ $or: [{ name: expression }, { description: expression }, { shortDescription: expression }] });
+  if (andFilters.length) filter.$and = andFilters;
   const sortValue = sort === 'price_low' ? { basePriceMinor: 1 } : sort === 'price_high' ? { basePriceMinor: -1 } : { createdAt: -1 };
   const skip = (page - 1) * limit;
   const [services, total] = await Promise.all([Service.find(filter).sort(sortValue).skip(skip).limit(limit).populate('businessId', 'name slug status moderationStatus'), Service.countDocuments(filter)]);

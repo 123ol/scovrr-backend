@@ -55,6 +55,7 @@ const platformAnalyticsRoutes = require('./modules/analytics/platform-analytics.
 const contentPostBusinessRoutes = require('./modules/content-posts/content-post.business.routes');
 const contentPostPublicRoutes = require('./modules/content-posts/content-post.public.routes');
 const catalogueUploadRoutes = require('./modules/media/catalogue-upload.routes');
+const homeSlideRoutes = require('./modules/home-slides/home-slide.routes');
 
 const app = express();
 let databasePromise = null;
@@ -149,6 +150,7 @@ app.use('/api/v1/businesses', productBusinessRoutes);
 app.use('/api/v1/businesses', inventoryRoutes);
 app.use('/api/v1', servicePublicRoutes);
 app.use('/api/v1', contentPostPublicRoutes);
+app.use('/api/v1/home-slides', homeSlideRoutes);
 app.use('/api/v1', portfolioPublicRoutes);
 app.use('/api/v1/businesses', serviceBusinessRoutes);
 app.use('/api/v1/businesses', contentPostBusinessRoutes);

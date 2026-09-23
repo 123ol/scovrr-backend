@@ -8,7 +8,9 @@ const discoverSchema = z.object({
   query: z.object({
     q: z.string().trim().max(120).optional(),
     type: z.enum(['all', 'products', 'services', 'businesses', 'posts']).default('all'),
+    postType: z.enum(['product_update', 'service_update', 'updates']).optional(),
     categoryId: objectId.optional(),
+    categorySlug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Must be a valid category slug').max(120).optional(),
     city: z.string().trim().max(120).optional(),
     latitude: z.coerce.number().min(-90).max(90).optional(),
     longitude: z.coerce.number().min(-180).max(180).optional(),

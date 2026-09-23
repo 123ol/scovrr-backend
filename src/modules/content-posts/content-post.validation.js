@@ -35,7 +35,8 @@ const listSchema = z.object({ body: z.record(z.never()).default({}), params: z.o
 const publicListSchema = z.object({ body: z.record(z.never()).default({}), params: z.object({ businessSlug: z.string().trim().min(1).max(120) }), query: z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(20).default(10) }) });
 const commentCreateSchema = z.object({ body: z.object({ body: z.string().trim().min(1).max(1_000) }), params: z.object({ postId: objectId }), query: z.record(z.never()).default({}) });
 const commentListSchema = z.object({ body: z.record(z.never()).default({}), params: z.object({ postId: objectId }), query: z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(50).default(20) }) });
+const likeSchema = z.object({ body: z.record(z.never()).default({}), params: z.object({ postId: objectId }), query: z.record(z.never()).default({}) });
 const adminListSchema = z.object({ body: z.record(z.never()).default({}), params: z.record(z.never()).default({}), query: z.object({ status: z.enum(['draft', 'pending_review', 'active', 'rejected', 'archived']).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(25) }) });
 const rejectSchema = z.object({ body: z.object({ reason: z.string().trim().min(5).max(1_000) }), params: z.object({ postId: objectId }), query: z.record(z.never()).default({}) });
 
-module.exports = { createSchema, updateSchema, postIdSchema, adminPostIdSchema, listSchema, publicListSchema, commentCreateSchema, commentListSchema, adminListSchema, rejectSchema };
+module.exports = { createSchema, updateSchema, postIdSchema, adminPostIdSchema, listSchema, publicListSchema, commentCreateSchema, commentListSchema, likeSchema, adminListSchema, rejectSchema };

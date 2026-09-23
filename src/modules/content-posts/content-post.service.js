@@ -4,6 +4,7 @@ const { Business } = require('../businesses/business.model');
 const { Product } = require('../products/product.model');
 const { Service } = require('../services/service.model');
 const { sanitizeCatalogueMedia } = require('../media/catalogue-media.service');
+const { ContentPostLike } = require('./content-post-like.model');
 
 function publicRelations(query) {
   return query
@@ -12,11 +13,28 @@ function publicRelations(query) {
     .populate({ path: 'linkedServiceId', match: { status: 'active', moderationStatus: 'approved' }, select: 'name slug basePriceMinor currency media' });
 }
 
+async function viewerLikeIds(posts, viewerId) {
+  if (!viewerId || !posts.length) return new Set();
+  const likes = await ContentPostLike.find({ userId: viewerId, postId: { $in: posts.map((post) => post._id) } }).select('postId').lean();
+  return new Set(likes.map((like) => like.postId.toString()));
+}
+
+async function publicPostJSON(posts, viewerId) {
+  const likedIds = await viewerLikeIds(posts, viewerId);
+  return posts.map((post) => post.toPublicJSON({ likedByViewer: likedIds.has(post._id.toString()) }));
+}
+
 function normalizeLinks(input) {
   return {
     linkedProductId: input.linkedProductId || null,
     linkedServiceId: input.linkedServiceId || null
   };
+}
+
+function assertPostHasContent(body, media) {
+  if (!String(body || '').trim() && !(media || []).length) {
+    throw new AppError(400, 'CONTENT_POST_EMPTY', 'Add text, a photo, or a video before saving this post');
+  }
 }
 
 async function validateLinks(businessId, input) {
@@ -35,6 +53,7 @@ async function validateLinks(businessId, input) {
 async function createPost(business, input, authorId) {
   const links = await validateLinks(business._id, input);
   const media = await sanitizeCatalogueMedia({ businessId: business._id, actorId: authorId, media: input.media || [], field: 'Post media', allowVideo: true });
+  assertPostHasContent(input.body, media);
   return ContentPost.create({ businessId: business._id, authorId, type: input.type, title: input.title || '', body: input.body, media, ...links });
 }
 
@@ -46,8 +65,13 @@ async function updatePost(businessId, postId, input, actorId) {
     linkedServiceId: input.linkedServiceId !== undefined ? input.linkedServiceId : post.linkedServiceId
   };
   const links = await validateLinks(businessId, mergedLinks);
+  const nextBody = input.body !== undefined ? input.body : post.body;
+  const nextMedia = input.media !== undefined
+    ? await sanitizeCatalogueMedia({ businessId, actorId, media: input.media, field: 'Post media', allowVideo: true })
+    : post.media;
+  assertPostHasContent(nextBody, nextMedia);
   for (const field of ['type', 'title', 'body']) if (input[field] !== undefined) post[field] = input[field];
-  if (input.media !== undefined) post.media = await sanitizeCatalogueMedia({ businessId, actorId, media: input.media, field: 'Post media', allowVideo: true });
+  if (input.media !== undefined) post.media = nextMedia;
   post.linkedProductId = links.linkedProductId;
   post.linkedServiceId = links.linkedServiceId;
   if (['active', 'rejected'].includes(post.status)) {
@@ -80,18 +104,21 @@ async function listBusinessPosts(businessId, query) {
   return { posts, total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
 }
 
-async function listPublicPosts(businessSlug, query) {
+async function listPublicPosts(businessSlug, query, viewerId) {
   const business = await Business.findOne({ slug: businessSlug, status: 'active', moderationStatus: 'approved' }).select('_id name slug');
   if (!business) throw new AppError(404, 'BUSINESS_NOT_FOUND', 'Business not found');
   const filter = { businessId: business._id, status: 'active', moderationStatus: 'approved' };
   const skip = (query.page - 1) * query.limit;
   const [posts, total] = await Promise.all([publicRelations(ContentPost.find(filter)).sort({ publishedAt: -1, createdAt: -1 }).skip(skip).limit(query.limit), ContentPost.countDocuments(filter)]);
-  return { posts: posts.map((post) => post.toPublicJSON()), business: { id: business._id.toString(), name: business.name, slug: business.slug }, total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+  return { posts: await publicPostJSON(posts, viewerId), business: { id: business._id.toString(), name: business.name, slug: business.slug }, total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
 }
 
-async function listDiscoverPosts(query, businessIds = null) {
+async function listDiscoverPosts(query, businessIds = null, viewerId) {
   const filter = { status: 'active', moderationStatus: 'approved' };
   if (businessIds) filter.businessId = { $in: businessIds };
+  if (query.postType === 'product_update') filter.type = 'product_update';
+  if (query.postType === 'service_update') filter.type = 'service_update';
+  if (query.postType === 'updates') filter.type = { $in: ['announcement', 'offer', 'tip'] };
   if (query.q) {
     const expression = new RegExp(String(query.q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     filter.$or = [{ title: expression }, { body: expression }];
@@ -101,7 +128,7 @@ async function listDiscoverPosts(query, businessIds = null) {
     publicRelations(ContentPost.find(filter)).sort({ publishedAt: -1, createdAt: -1 }).skip(skip).limit(query.limit),
     ContentPost.countDocuments(filter)
   ]);
-  return { posts: posts.map((post) => post.toPublicJSON()), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+  return { posts: await publicPostJSON(posts, viewerId), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
 }
 
 async function listAdminPosts(query) {
@@ -129,4 +156,4 @@ async function reviewPost(postId, decision, reason = null) {
   return post;
 }
 
-module.exports = { createPost, updatePost, submitPost, listBusinessPosts, listPublicPosts, listDiscoverPosts, listAdminPosts, reviewPost };
+module.exports = { createPost, updatePost, submitPost, listBusinessPosts, listPublicPosts, listDiscoverPosts, listAdminPosts, reviewPost, assertPostHasContent };

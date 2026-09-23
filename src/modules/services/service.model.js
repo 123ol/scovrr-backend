@@ -76,6 +76,7 @@ serviceSchema.methods.toCardJSON = function toCardJSON() {
     id: this._id.toString(),
     name: this.name,
     slug: this.slug,
+    categoryId: this.categoryId?._id ? this.categoryId._id.toString() : (this.categoryId ? this.categoryId.toString() : null),
     shortDescription: this.shortDescription,
     priceMinor: activeVariants.length > 0 ? Math.min(...activeVariants.map((variant) => variant.priceMinor)) : this.basePriceMinor,
     currency: this.currency,

@@ -1,6 +1,26 @@
 const { AppError } = require('../../common/errors/AppError');
 const { slugify } = require('../../common/slug');
 const { Category } = require('./category.model');
+const { DEFAULT_SELLER_CATEGORIES } = require('./default-categories');
+
+let defaultCategoriesReady = false;
+let defaultCategoriesPromise = null;
+
+async function ensureDefaultCategories() {
+  if (defaultCategoriesReady) return;
+  if (!defaultCategoriesPromise) {
+    defaultCategoriesPromise = Promise.all(DEFAULT_SELLER_CATEGORIES.map((category, sortOrder) => Category.updateOne(
+      { slug: category.slug },
+      { $setOnInsert: { ...category, type: 'both', parent: null, sortOrder, enabled: true } },
+      { upsert: true }
+    ))).then(() => {
+      defaultCategoriesReady = true;
+    }).finally(() => {
+      defaultCategoriesPromise = null;
+    });
+  }
+  await defaultCategoriesPromise;
+}
 
 async function ensureParentIsValid(parentId, categoryId, type) {
   if (!parentId) return null;
@@ -46,6 +66,7 @@ async function createCategory(input) {
 }
 
 async function listCategories(query = {}, includeDisabled = false) {
+  await ensureDefaultCategories();
   const filter = includeDisabled ? {} : { enabled: true };
   if (query.type) filter.type = query.type === 'both' ? 'both' : { $in: [query.type, 'both'] };
   return Category.find(filter).sort({ parent: 1, sortOrder: 1, name: 1 }).lean();
@@ -71,4 +92,4 @@ async function updateCategory(categoryId, input) {
   return category;
 }
 
-module.exports = { createCategory, listCategories, updateCategory, ensureParentIsValid };
+module.exports = { createCategory, listCategories, updateCategory, ensureParentIsValid, ensureDefaultCategories };

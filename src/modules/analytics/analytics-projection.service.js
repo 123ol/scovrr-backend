@@ -14,6 +14,16 @@ const COUNT_FIELDS = {
 
 function dateKey(date) { return new Date(date || Date.now()).toISOString().slice(0, 10); }
 function actorKey(event) { return event.actorId?.toString() || event.anonymousSessionId || event.sessionId || 'anonymous'; }
+async function ensureEventId(event) {
+  if (event.eventId) return event.eventId;
+  // Older analytics documents predate the eventId field. Give them a stable
+  // identifier before projection so one malformed legacy record cannot keep
+  // the background worker failing forever.
+  const eventId = `legacy_${event._id.toString()}`;
+  await AnalyticsEvent.updateOne({ _id: event._id, $or: [{ eventId: { $exists: false } }, { eventId: null }, { eventId: '' }] }, { $set: { eventId } });
+  event.eventId = eventId;
+  return eventId;
+}
 function aggregateFilter(event, scope, entityType = null, entityId = null) {
   return { dateKey: dateKey(event.occurredAt), scope, businessId: event.businessId || null, locationId: event.locationId || null, entityType, entityId, currency: event.metadata?.currency || null };
 }
@@ -24,6 +34,7 @@ async function increment(filter, increments) {
 }
 
 async function projectEvent(event) {
+  if (!event.eventName) return;
   if (!event.businessId && !['DISCOVER_VIEWED', 'SEARCH_PERFORMED', 'SEARCH_RESULT_CLICKED'].includes(event.eventName)) return;
   const countField = COUNT_FIELDS[event.eventName];
   const entityType = event.entityType || null;
@@ -64,6 +75,7 @@ async function processPending(limit = 100, eventFilter = {}) {
   let processed = 0;
   for (const event of events) {
     try {
+      await ensureEventId(event);
       if (await projectOne(event)) processed += 1;
       await AnalyticsEvent.updateOne({ _id: event._id, aggregatedAt: null }, { $set: { aggregatedAt: new Date() } });
     } catch (error) { console.error('Analytics projection failed:', error.message); }
@@ -71,4 +83,4 @@ async function processPending(limit = 100, eventFilter = {}) {
   return processed;
 }
 
-module.exports = { processPending, projectEvent, projectOne, dateKey, COUNT_FIELDS };
+module.exports = { processPending, projectEvent, projectOne, ensureEventId, dateKey, COUNT_FIELDS };

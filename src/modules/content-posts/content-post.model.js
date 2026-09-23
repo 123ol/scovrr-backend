@@ -41,6 +41,7 @@ const contentPostSchema = new mongoose.Schema({
   media: { type: [mediaSchema], default: [] },
   linkedProductId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', default: null },
   linkedServiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service', default: null },
+  likesCount: { type: Number, min: 0, default: 0 },
   commentsCount: { type: Number, min: 0, default: 0 },
   status: { type: String, enum: CONTENT_POST_STATUSES, default: 'draft', index: true },
   moderationStatus: { type: String, enum: ['pending', 'approved', 'rejected', 'removed'], default: 'pending', index: true },
@@ -72,7 +73,7 @@ contentPostSchema.methods.toOwnerJSON = function toOwnerJSON() {
   };
 };
 
-contentPostSchema.methods.toPublicJSON = function toPublicJSON() {
+contentPostSchema.methods.toPublicJSON = function toPublicJSON({ likedByViewer = false } = {}) {
   return {
     id: this._id.toString(),
     businessId: idString(this.businessId),
@@ -84,6 +85,8 @@ contentPostSchema.methods.toPublicJSON = function toPublicJSON() {
     linkedServiceId: idString(this.linkedServiceId),
     reference: publicReference(this.linkedProductId, 'product') || publicReference(this.linkedServiceId, 'service'),
     business: this.businessId?.name ? { id: idString(this.businessId), name: this.businessId.name, slug: this.businessId.slug } : null,
+    likesCount: this.likesCount || 0,
+    likedByViewer: Boolean(likedByViewer),
     commentsCount: this.commentsCount || 0,
     publishedAt: this.publishedAt,
     createdAt: this.createdAt

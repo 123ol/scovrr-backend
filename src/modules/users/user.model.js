@@ -4,6 +4,24 @@ const USER_STATUSES = ['active', 'suspended', 'deactivated', 'pending_verificati
 const ACCOUNT_TYPES = ['buyer', 'seller'];
 const ADMIN_ROLES = ['super_admin', 'operations', 'customer_support', 'moderator', 'verification_admin', 'finance_admin', 'marketing_admin', 'analytics_admin', 'verification', 'moderation', 'finance', 'support'];
 
+const userLocationSchema = new mongoose.Schema({
+  type: { type: String, enum: ['Point'], default: 'Point' },
+  coordinates: {
+    type: [Number],
+    required: true,
+    validate: {
+      validator: (value) => value.length === 2 && value[0] >= -180 && value[0] <= 180 && value[1] >= -90 && value[1] <= 90,
+      message: 'Coordinates must be [longitude, latitude]'
+    }
+  },
+  city: { type: String, trim: true, maxlength: 120 },
+  state: { type: String, trim: true, maxlength: 120 },
+  country: { type: String, trim: true, maxlength: 120 },
+  area: { type: String, trim: true, maxlength: 120 },
+  accuracy: { type: Number, min: 0, default: null },
+  capturedAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const userSchema = new mongoose.Schema({
   firstName: { type: String, required: true, trim: true, maxlength: 80 },
   lastName: { type: String, required: true, trim: true, maxlength: 80 },
@@ -15,7 +33,8 @@ const userSchema = new mongoose.Schema({
   adminRoles: { type: [{ type: String, enum: ADMIN_ROLES }], default: [] },
   emailVerifiedAt: { type: Date, default: null },
   phoneVerifiedAt: { type: Date, default: null },
-  lastLoginAt: { type: Date, default: null }
+  lastLoginAt: { type: Date, default: null },
+  location: { type: userLocationSchema, default: null }
 }, { timestamps: true, versionKey: false });
 
 userSchema.methods.toSafeJSON = function toSafeJSON(options = {}) {
@@ -29,6 +48,7 @@ userSchema.methods.toSafeJSON = function toSafeJSON(options = {}) {
     status: this.status,
     emailVerified: Boolean(this.emailVerifiedAt),
     phoneVerified: Boolean(this.phoneVerifiedAt),
+    location: this.location || null,
     createdAt: this.createdAt
   };
 
