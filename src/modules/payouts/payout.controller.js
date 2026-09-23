@@ -1,0 +1,15 @@
+const { asyncHandler } = require('../../common/http/asyncHandler');
+const { sendSuccess } = require('../../common/http/response');
+const service = require('./payout.service');
+const { recordAudit } = require('../audit/audit.service');
+
+const listBusiness = asyncHandler(async (req, res) => sendSuccess(res, await service.listBusinessPayouts(req.business._id, req.query)));
+const listAdmin = asyncHandler(async (req, res) => sendSuccess(res, await service.listAdminPayouts(req.query)));
+const getProfile = asyncHandler(async (req, res) => sendSuccess(res, { profile: (await service.getPayoutProfile(req.business._id))?.toSafeJSON() || null }));
+const execute = asyncHandler(async (req, res) => { const payout = await service.executePayout(req.params.payoutId); await recordAudit({ actorId: req.auth.userId, action: 'PAYOUT_EXECUTION_REQUESTED', targetType: 'payout', targetId: payout._id, reason: req.body.reason, after: payout.toSafeJSON(), ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null }); return sendSuccess(res, { payout: payout.toSafeJSON() }); });
+const verify = asyncHandler(async (req, res) => { const payout = await service.verifyPayout(req.params.payoutId); await recordAudit({ actorId: req.auth.userId, action: 'PAYOUT_MANUALLY_RESOLVED', targetType: 'payout', targetId: payout._id, reason: req.body.reason, after: payout.toSafeJSON(), ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null }); return sendSuccess(res, { payout: payout.toSafeJSON() }); });
+const hold = asyncHandler(async (req, res) => { const payout = await service.holdPayout(req.params.payoutId, req.body.reason); await recordAudit({ actorId: req.auth.userId, action: 'PAYOUT_HELD', targetType: 'payout', targetId: payout._id, reason: req.body.reason, after: payout.toSafeJSON(), ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null }); return sendSuccess(res, { payout: payout.toSafeJSON() }); });
+const release = asyncHandler(async (req, res) => { const payout = await service.releasePayout(req.params.payoutId); await recordAudit({ actorId: req.auth.userId, action: 'PAYOUT_RELEASED', targetType: 'payout', targetId: payout._id, reason: req.body.reason, after: payout.toSafeJSON(), ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null }); return sendSuccess(res, { payout: payout.toSafeJSON() }); });
+const setProfile = asyncHandler(async (req, res) => { const profile = await service.upsertPayoutProfile(req.params.businessId, req.auth.userId, req.body); await recordAudit({ actorId: req.auth.userId, action: 'payout.profile_updated', targetType: 'payout_profile', targetId: profile._id, metadata: { businessId: req.params.businessId }, after: profile.toSafeJSON(), ipAddress: req.ip }); return sendSuccess(res, { profile: profile.toSafeJSON() }); });
+
+module.exports = { listBusiness, listAdmin, getProfile, execute, verify, hold, release, setProfile };

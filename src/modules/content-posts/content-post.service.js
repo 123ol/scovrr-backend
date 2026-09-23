@@ -1,0 +1,132 @@
+const { AppError } = require('../../common/errors/AppError');
+const { ContentPost } = require('./content-post.model');
+const { Business } = require('../businesses/business.model');
+const { Product } = require('../products/product.model');
+const { Service } = require('../services/service.model');
+const { sanitizeCatalogueMedia } = require('../media/catalogue-media.service');
+
+function publicRelations(query) {
+  return query
+    .populate({ path: 'businessId', select: 'name slug' })
+    .populate({ path: 'linkedProductId', match: { status: 'active', moderationStatus: 'approved' }, select: 'name slug basePriceMinor currency media' })
+    .populate({ path: 'linkedServiceId', match: { status: 'active', moderationStatus: 'approved' }, select: 'name slug basePriceMinor currency media' });
+}
+
+function normalizeLinks(input) {
+  return {
+    linkedProductId: input.linkedProductId || null,
+    linkedServiceId: input.linkedServiceId || null
+  };
+}
+
+async function validateLinks(businessId, input) {
+  const links = normalizeLinks(input);
+  if (links.linkedProductId) {
+    const product = await Product.exists({ _id: links.linkedProductId, businessId });
+    if (!product) throw new AppError(400, 'LINKED_PRODUCT_NOT_FOUND', 'The linked product does not belong to this business');
+  }
+  if (links.linkedServiceId) {
+    const service = await Service.exists({ _id: links.linkedServiceId, businessId });
+    if (!service) throw new AppError(400, 'LINKED_SERVICE_NOT_FOUND', 'The linked service does not belong to this business');
+  }
+  return links;
+}
+
+async function createPost(business, input, authorId) {
+  const links = await validateLinks(business._id, input);
+  const media = await sanitizeCatalogueMedia({ businessId: business._id, actorId: authorId, media: input.media || [], field: 'Post media', allowVideo: true });
+  return ContentPost.create({ businessId: business._id, authorId, type: input.type, title: input.title || '', body: input.body, media, ...links });
+}
+
+async function updatePost(businessId, postId, input, actorId) {
+  const post = await ContentPost.findOne({ _id: postId, businessId });
+  if (!post) throw new AppError(404, 'CONTENT_POST_NOT_FOUND', 'Content post not found');
+  const mergedLinks = {
+    linkedProductId: input.linkedProductId !== undefined ? input.linkedProductId : post.linkedProductId,
+    linkedServiceId: input.linkedServiceId !== undefined ? input.linkedServiceId : post.linkedServiceId
+  };
+  const links = await validateLinks(businessId, mergedLinks);
+  for (const field of ['type', 'title', 'body']) if (input[field] !== undefined) post[field] = input[field];
+  if (input.media !== undefined) post.media = await sanitizeCatalogueMedia({ businessId, actorId, media: input.media, field: 'Post media', allowVideo: true });
+  post.linkedProductId = links.linkedProductId;
+  post.linkedServiceId = links.linkedServiceId;
+  if (['active', 'rejected'].includes(post.status)) {
+    post.status = 'draft';
+    post.moderationStatus = 'pending';
+    post.publishedAt = null;
+    post.rejectionReason = null;
+  }
+  await post.save();
+  return post;
+}
+
+async function submitPost(businessId, postId) {
+  const [business, post] = await Promise.all([Business.findById(businessId), ContentPost.findOne({ _id: postId, businessId })]);
+  if (!post) throw new AppError(404, 'CONTENT_POST_NOT_FOUND', 'Content post not found');
+  if (!business || business.status !== 'active' || business.moderationStatus !== 'approved') throw new AppError(409, 'BUSINESS_NOT_READY_FOR_CONTENT', 'The business must be active and approved before content can be published');
+  if (!['draft', 'rejected'].includes(post.status)) throw new AppError(409, 'CONTENT_POST_SUBMIT_NOT_AVAILABLE', 'This content post cannot be submitted in its current state');
+  post.status = 'pending_review';
+  post.moderationStatus = 'pending';
+  post.rejectionReason = null;
+  post.publishedAt = null;
+  await post.save();
+  return post;
+}
+
+async function listBusinessPosts(businessId, query) {
+  const filter = { businessId, ...(query.status ? { status: query.status } : {}) };
+  const skip = (query.page - 1) * query.limit;
+  const [posts, total] = await Promise.all([ContentPost.find(filter).sort({ createdAt: -1 }).skip(skip).limit(query.limit), ContentPost.countDocuments(filter)]);
+  return { posts, total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+}
+
+async function listPublicPosts(businessSlug, query) {
+  const business = await Business.findOne({ slug: businessSlug, status: 'active', moderationStatus: 'approved' }).select('_id name slug');
+  if (!business) throw new AppError(404, 'BUSINESS_NOT_FOUND', 'Business not found');
+  const filter = { businessId: business._id, status: 'active', moderationStatus: 'approved' };
+  const skip = (query.page - 1) * query.limit;
+  const [posts, total] = await Promise.all([publicRelations(ContentPost.find(filter)).sort({ publishedAt: -1, createdAt: -1 }).skip(skip).limit(query.limit), ContentPost.countDocuments(filter)]);
+  return { posts: posts.map((post) => post.toPublicJSON()), business: { id: business._id.toString(), name: business.name, slug: business.slug }, total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+}
+
+async function listDiscoverPosts(query, businessIds = null) {
+  const filter = { status: 'active', moderationStatus: 'approved' };
+  if (businessIds) filter.businessId = { $in: businessIds };
+  if (query.q) {
+    const expression = new RegExp(String(query.q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    filter.$or = [{ title: expression }, { body: expression }];
+  }
+  const skip = (query.page - 1) * query.limit;
+  const [posts, total] = await Promise.all([
+    publicRelations(ContentPost.find(filter)).sort({ publishedAt: -1, createdAt: -1 }).skip(skip).limit(query.limit),
+    ContentPost.countDocuments(filter)
+  ]);
+  return { posts: posts.map((post) => post.toPublicJSON()), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+}
+
+async function listAdminPosts(query) {
+  const filter = query.status ? { status: query.status } : { status: 'pending_review' };
+  const skip = (query.page - 1) * query.limit;
+  const [posts, total] = await Promise.all([ContentPost.find(filter).sort({ createdAt: 1 }).skip(skip).limit(query.limit).populate('businessId', 'name slug'), ContentPost.countDocuments(filter)]);
+  return { posts, total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+}
+
+async function reviewPost(postId, decision, reason = null) {
+  const post = await ContentPost.findById(postId);
+  if (!post) throw new AppError(404, 'CONTENT_POST_NOT_FOUND', 'Content post not found');
+  if (decision === 'approve') {
+    post.status = 'active';
+    post.moderationStatus = 'approved';
+    post.publishedAt = new Date();
+    post.rejectionReason = null;
+  } else {
+    post.status = 'rejected';
+    post.moderationStatus = 'rejected';
+    post.rejectionReason = reason;
+    post.publishedAt = null;
+  }
+  await post.save();
+  return post;
+}
+
+module.exports = { createPost, updatePost, submitPost, listBusinessPosts, listPublicPosts, listDiscoverPosts, listAdminPosts, reviewPost };
