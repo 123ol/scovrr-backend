@@ -6,7 +6,7 @@ const { PaystackProvider } = require('../src/integrations/payments/paystack.prov
 const { Payment } = require('../src/modules/payments/payment.model');
 const { Review } = require('../src/modules/reviews/review.model');
 const { createReviewSchema } = require('../src/modules/reviews/review.validation');
-const { sendMessageSchema, messageSearchSchema, archiveSchema, conversationEscalationSchema } = require('../src/modules/conversations/conversation.validation');
+const { sendMessageSchema, listSchema, messageSearchSchema, archiveSchema, conversationEscalationSchema } = require('../src/modules/conversations/conversation.validation');
 const { Conversation } = require('../src/modules/conversations/conversation.model');
 const { assertBuyerCanStartConversation, assertSellerCanReply, makeConversationKey, activeSupportEscalationFilter, MESSAGE_CONVERSATION_RATE_LIMIT, MESSAGE_ACCOUNT_RATE_LIMIT } = require('../src/modules/conversations/conversation.service');
 const { Business } = require('../src/modules/businesses/business.model');
@@ -58,6 +58,12 @@ test('message conversations expose a bounded sender rate-control boundary', () =
 
 test('conversation search, filters, and archive contracts are bounded and explicit', () => {
   const id = '507f1f77bcf86cd799439011';
+  const activeList = listSchema.safeParse({ body: {}, params: {}, query: { archived: 'false', page: '1', limit: '50' } });
+  const archivedList = listSchema.safeParse({ body: {}, params: {}, query: { archived: 'true', page: '1', limit: '50' } });
+  assert.equal(activeList.success, true);
+  assert.equal(activeList.data.query.archived, false);
+  assert.equal(archivedList.success, true);
+  assert.equal(archivedList.data.query.archived, true);
   assert.equal(messageSearchSchema.safeParse({ body: {}, params: {}, query: { q: 'order', page: '1', limit: '20', contextType: 'order' } }).success, true);
   assert.equal(archiveSchema.safeParse({ body: { archived: true }, params: { conversationId: id }, query: {} }).success, true);
   assert.equal(typeof require('../src/modules/conversations/conversation.service').searchMessages, 'function');

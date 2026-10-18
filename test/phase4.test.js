@@ -16,6 +16,7 @@ test('service validation supports deposits, location types, and generic variants
   const result = createServiceSchema.safeParse({
     body: {
       name: 'Bridal Makeup', basePriceMinor: 2500000, currency: 'ngn', durationMinutes: 120,
+      serviceType: 'service', audience: 'Women', subcategory: 'Bridal Makeup', highlights: ['Premium products'], included: ['Trial session'], process: [{ title: 'Consultation', body: 'Discuss the look.' }], bestFor: ['Bridal'], bookingType: 'Fixed Time', maxBookingsPerDay: 8,
       locationTypes: ['at_business', 'at_customer'], paymentRule: 'deposit', depositAmountMinor: 500000,
       variants: [{ name: 'Luxury', priceMinor: 4000000, durationMinutes: 180, active: true }]
     },
@@ -23,6 +24,8 @@ test('service validation supports deposits, location types, and generic variants
   });
   assert.equal(result.success, true);
   assert.equal(result.data.body.currency, 'NGN');
+  assert.equal(result.data.body.serviceType, 'service');
+  assert.deepEqual(result.data.body.process[0], { title: 'Consultation', body: 'Discuss the look.' });
   assert.equal(result.data.body.variants[0].durationMinutes, 180);
 });
 

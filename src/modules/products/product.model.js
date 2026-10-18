@@ -41,6 +41,21 @@ const productSchema = new mongoose.Schema({
   shortDescription: { type: String, trim: true, maxlength: 300, default: '' },
   brand: { type: String, trim: true, maxlength: 120 },
   condition: { type: String, enum: PRODUCT_CONDITIONS, default: 'new' },
+  gender: { type: String, trim: true, maxlength: 40 },
+  material: { type: String, trim: true, maxlength: 120 },
+  color: { type: String, trim: true, maxlength: 80 },
+  size: { type: String, trim: true, maxlength: 80 },
+  measurements: { type: String, trim: true, maxlength: 160 },
+  weight: { type: String, trim: true, maxlength: 80 },
+  sku: { type: String, trim: true, maxlength: 100 },
+  fulfillment: { type: String, enum: ['delivery', 'pickup', 'arrange'], default: 'delivery' },
+  deliveryAreas: { type: String, trim: true, maxlength: 500 },
+  deliveryFeeType: { type: String, enum: ['flat', 'location'], default: 'flat' },
+  deliveryTime: { type: String, trim: true, maxlength: 80 },
+  instructions: { type: String, trim: true, maxlength: 1_000 },
+  returnPolicy: { type: String, trim: true, maxlength: 120 },
+  returnAddress: { type: String, trim: true, maxlength: 500 },
+  paymentMethods: { type: [String], default: [] },
   tags: { type: [String], default: [] },
   media: { type: [mediaSchema], default: [] },
   basePriceMinor: { type: Number, required: true, min: 1 },
@@ -96,6 +111,21 @@ productSchema.methods.toOwnerJSON = function toOwnerJSON() {
     categoryId: this.categoryId?._id ? this.categoryId._id.toString() : (this.categoryId ? this.categoryId.toString() : null),
     description: this.description,
     brand: this.brand || null,
+    gender: this.gender || null,
+    material: this.material || null,
+    color: this.color || null,
+    size: this.size || null,
+    measurements: this.measurements || null,
+    weight: this.weight || null,
+    sku: this.sku || null,
+    fulfillment: this.fulfillment,
+    deliveryAreas: this.deliveryAreas || null,
+    deliveryFeeType: this.deliveryFeeType,
+    deliveryTime: this.deliveryTime || null,
+    instructions: this.instructions || null,
+    returnPolicy: this.returnPolicy || null,
+    returnAddress: this.returnAddress || null,
+    paymentMethods: this.paymentMethods,
     tags: this.tags,
     media: this.media,
     inventoryTracking: this.inventoryTracking,
@@ -110,7 +140,7 @@ productSchema.methods.toOwnerJSON = function toOwnerJSON() {
 
 productSchema.methods.toPublicJSON = function toPublicJSON() {
   const variants = this.variants.filter((variant) => variant.active).map((variant) => ({ variantId: variant.variantId, name: variant.name, attributes: variant.attributes, sku: variant.sku || null, priceMinor: variant.priceMinor, compareAtPriceMinor: variant.compareAtPriceMinor, media: variant.media.map(publicMedia), availableQuantity: variant.availableQuantity, inventoryTracking: variant.inventoryTracking }));
-  return { ...this.toCardJSON(), description: this.description, brand: this.brand || null, tags: this.tags, media: this.media.map(publicMedia), basePriceMinor: this.basePriceMinor, compareAtPriceMinor: this.compareAtPriceMinor, variants };
+  return { ...this.toCardJSON(), description: this.description, brand: this.brand || null, gender: this.gender || null, material: this.material || null, color: this.color || null, size: this.size || null, measurements: this.measurements || null, weight: this.weight || null, sku: this.sku || null, fulfillment: this.fulfillment, deliveryAreas: this.deliveryAreas || null, deliveryFeeType: this.deliveryFeeType, deliveryTime: this.deliveryTime || null, instructions: this.instructions || null, returnPolicy: this.returnPolicy || null, paymentMethods: this.paymentMethods, tags: this.tags, media: this.media.map(publicMedia), basePriceMinor: this.basePriceMinor, compareAtPriceMinor: this.compareAtPriceMinor, variants };
 };
 
 productSchema.methods.toSnapshot = function toSnapshot(variantId, quantity) {

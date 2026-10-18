@@ -72,6 +72,21 @@ async function createProduct(business, input, actorId = null) {
     shortDescription: input.shortDescription || '',
     brand: input.brand,
     condition: input.condition,
+    gender: input.gender,
+    material: input.material,
+    color: input.color,
+    size: input.size,
+    measurements: input.measurements,
+    weight: input.weight,
+    sku: input.sku,
+    fulfillment: input.fulfillment,
+    deliveryAreas: input.deliveryAreas,
+    deliveryFeeType: input.deliveryFeeType,
+    deliveryTime: input.deliveryTime,
+    instructions: input.instructions,
+    returnPolicy: input.returnPolicy,
+    returnAddress: input.returnAddress,
+    paymentMethods: input.paymentMethods,
     tags: input.tags,
     media,
     basePriceMinor: input.basePriceMinor,
@@ -99,6 +114,7 @@ async function updateProduct(business, productId, input, actorId = null) {
   if (input.shortDescription !== undefined) product.shortDescription = input.shortDescription;
   if (input.brand !== undefined) product.brand = input.brand;
   if (input.condition !== undefined) product.condition = input.condition;
+  for (const field of ['gender', 'material', 'color', 'size', 'measurements', 'weight', 'sku', 'fulfillment', 'deliveryAreas', 'deliveryFeeType', 'deliveryTime', 'instructions', 'returnPolicy', 'returnAddress', 'paymentMethods']) if (input[field] !== undefined) product[field] = input[field];
   if (input.tags !== undefined) product.tags = input.tags;
   if (input.media !== undefined) product.media = await sanitizeCatalogueMedia({ businessId: business._id, actorId, media: input.media, field: 'Product media' });
   const priceChanged = input.basePriceMinor !== undefined || input.currency !== undefined || input.variants !== undefined;

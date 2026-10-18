@@ -33,6 +33,7 @@ test('product validation supports generic variant attributes and smallest-unit m
       currency: 'ngn',
       inventoryTracking: true,
       stockQuantity: 0,
+      material: 'Cotton', color: 'Purple', size: 'Medium', sku: 'DRESS-001', fulfillment: 'delivery', paymentMethods: ['SCOVRR Pay'],
       variants: [{ name: 'Medium / Purple', attributes: { size: 'M', colour: 'Purple' }, priceMinor: 3500000, stockQuantity: 1 }]
     },
     params: { businessId: objectId },
@@ -40,6 +41,8 @@ test('product validation supports generic variant attributes and smallest-unit m
   });
   assert.equal(result.success, true);
   assert.equal(result.data.body.currency, 'NGN');
+  assert.equal(result.data.body.sku, 'DRESS-001');
+  assert.deepEqual(result.data.body.paymentMethods, ['SCOVRR Pay']);
   assert.deepEqual(result.data.body.variants[0].attributes, { size: 'M', colour: 'Purple' });
 });
 

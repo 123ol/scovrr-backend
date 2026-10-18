@@ -12,6 +12,8 @@ const { Business } = require('../businesses/business.model');
 const { Review } = require('../reviews/review.model');
 const { ContentPost } = require('../content-posts/content-post.model');
 const { User } = require('../users/user.model');
+const notificationService = require('../notifications/notification.service');
+const { logger } = require('../../common/observability/logger');
 const { refreshAggregates } = require('../reviews/review.service');
 
 const SUBJECT_MODELS = { business: Business, product: Product, service: Service, content_post: ContentPost, review: Review };
@@ -24,6 +26,45 @@ function caseNumber() {
 function activeSubjectKey(subjectType, subjectId) { return `${subjectType}:${subjectId.toString()}`; }
 
 function idOf(value) { return value?._id?.toString() || value?.toString() || null; }
+
+function moderationNotificationDetails(subjectType, outcome, subject) {
+  if (!['product', 'service', 'content_post'].includes(subjectType) || !['approved', 'rejected', 'removed'].includes(outcome)) return null;
+  const subjectId = idOf(subject);
+  const businessId = idOf(subject?.businessId);
+  if (!subjectId || !businessId) return null;
+  const label = subjectType === 'product' ? 'product' : subjectType === 'service' ? 'service' : 'post';
+  const name = subject?.name || subject?.title || 'listing';
+  const action = outcome === 'approved' ? 'approved' : outcome === 'rejected' ? 'needs changes' : 'removed';
+  const body = outcome === 'approved'
+    ? `Your ${label} "${name}" has been approved and is now live for customers.`
+    : outcome === 'rejected'
+      ? `Your ${label} "${name}" needs changes before it can go live. Review the moderation feedback and resubmit it.`
+      : `Your ${label} "${name}" was removed from discovery. Review the moderation details in your seller workspace.`;
+  const subjectKey = subjectType === 'content_post' ? 'contentPostId' : `${subjectType}Id`;
+  return {
+    type: `${subjectType}_${outcome}`,
+    title: `${label[0].toUpperCase()}${label.slice(1)} ${action}`,
+    body,
+    data: { [subjectKey]: subjectId, businessId, outcome, route: '/notifications' },
+    subjectId,
+    businessId
+  };
+}
+
+async function notifyBusinessOwnerOfModeration(item, outcome, subject) {
+  const details = moderationNotificationDetails(item.subjectType, outcome, subject);
+  if (!details) return null;
+  const business = await Business.findById(details.businessId).select('ownerId').lean();
+  if (!business?.ownerId) return null;
+  return notificationService.createNotification({
+    userId: business.ownerId,
+    type: details.type,
+    title: details.title,
+    body: details.body,
+    data: details.data,
+    deduplicationKey: `moderation:${item._id.toString()}:${outcome}`
+  });
+}
 
 function severityForReason(reason) {
   if (['counterfeit', 'fraud', 'safety', 'prohibited_goods'].includes(reason)) return 'high';
@@ -174,7 +215,7 @@ async function decideCase(caseId, adminId, outcome, note) {
     throw new AppError(409, 'MODERATION_CASE_CLOSED', 'This moderation case has already been decided');
   }
   const before = item.toSafeJSON();
-  const moderatedSubject = SUBJECT_MODELS[item.subjectType] ? await SUBJECT_MODELS[item.subjectType].findById(item.subjectId).select('status moderationStatus') : null;
+  const moderatedSubject = SUBJECT_MODELS[item.subjectType] ? await SUBJECT_MODELS[item.subjectType].findById(item.subjectId).select('name title businessId status moderationStatus') : null;
   if (['approved', 'rejected', 'removed'].includes(outcome)) await applySubjectDecision(item, outcome, note);
   item.status = outcome;
   item.decision = { outcome, note, decidedBy: adminId, decidedAt: new Date(), subjectStatusBefore: moderatedSubject?.status || null, subjectModerationStatusBefore: moderatedSubject?.moderationStatus || null };
@@ -183,6 +224,9 @@ async function decideCase(caseId, adminId, outcome, note) {
   await item.save();
   if (outcome !== 'action_required') {
     await Report.updateMany({ moderationCaseId: item._id, status: { $in: ACTIVE_STATUSES } }, { $set: { status: outcome === 'dismissed' ? 'dismissed' : 'resolved', resolution: note, resolvedBy: adminId, resolvedAt: new Date() } });
+  }
+  if (['approved', 'rejected', 'removed'].includes(outcome)) {
+    try { await notifyBusinessOwnerOfModeration(item, outcome, moderatedSubject); } catch (error) { logger.warn('moderation.owner_notification.failed', { moderationCaseId: item._id.toString(), subjectType: item.subjectType, outcome, error: { name: error.name, code: error.code, message: error.message } }); }
   }
   return { item, before };
 }
@@ -298,4 +342,4 @@ async function decideAppeal(appealId, adminId, outcome, note) {
   return appeal;
 }
 
-module.exports = { caseNumber, severityForReason, severityRank, createOrAttachCase, listAdminCases, listModerationAssignees, getAdminCase, assignCase, decideCase, bulkDecideCases, addNote, createAppeal, listBusinessAppeals, listBusinessAppealableCases, getBusinessAppeal, listAdminAppeals, getAdminAppeal, decideAppeal, isAppealableCase, applySubjectDecision, ACTIVE_STATUSES, APPEALABLE_CASE_STATUSES, ACTIVE_APPEAL_STATUSES, MODERATION_APPEAL_STATUSES };
+module.exports = { caseNumber, severityForReason, severityRank, createOrAttachCase, listAdminCases, listModerationAssignees, getAdminCase, assignCase, decideCase, bulkDecideCases, addNote, createAppeal, listBusinessAppeals, listBusinessAppealableCases, getBusinessAppeal, listAdminAppeals, getAdminAppeal, decideAppeal, isAppealableCase, applySubjectDecision, moderationNotificationDetails, notifyBusinessOwnerOfModeration, ACTIVE_STATUSES, APPEALABLE_CASE_STATUSES, ACTIVE_APPEAL_STATUSES, MODERATION_APPEAL_STATUSES };

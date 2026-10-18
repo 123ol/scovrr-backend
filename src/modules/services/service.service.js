@@ -88,7 +88,7 @@ async function updateService(business, serviceId, input, actorId = null) {
   if (!service) throw new AppError(404, 'SERVICE_NOT_FOUND', 'Service not found');
   if (input.categoryId !== undefined) service.categoryId = await validateCategory(input.categoryId, business);
   const priceChanged = input.basePriceMinor !== undefined || input.currency !== undefined || input.variants !== undefined;
-  for (const field of ['name', 'description', 'shortDescription', 'basePriceMinor', 'currency', 'durationMinutes', 'bufferBeforeMinutes', 'bufferAfterMinutes', 'locationTypes', 'paymentRule', 'depositAmountMinor', 'cancellationWindowHours', 'minNoticeMinutes', 'maxAdvanceDays']) if (input[field] !== undefined) service[field] = input[field];
+  for (const field of ['name', 'description', 'shortDescription', 'subcategory', 'serviceType', 'audience', 'experience', 'yearsExperience', 'highlights', 'included', 'process', 'bestFor', 'requirements', 'notes', 'bookingType', 'maxBookingsPerDay', 'sameDayBooking', 'autoAcceptBookings', 'approvalRequired', 'basePriceMinor', 'currency', 'durationMinutes', 'bufferBeforeMinutes', 'bufferAfterMinutes', 'locationTypes', 'paymentRule', 'depositAmountMinor', 'cancellationWindowHours', 'minNoticeMinutes', 'maxAdvanceDays']) if (input[field] !== undefined) service[field] = input[field];
   if (input.media !== undefined) service.media = await sanitizeCatalogueMedia({ businessId: business._id, actorId, media: input.media, field: 'Service media' });
   if (input.staffUserIds !== undefined) service.staffUserIds = await validateStaff(business._id, input.staffUserIds);
   if (input.locationIds !== undefined) service.locationIds = await validateLocations(business._id, input.locationIds);

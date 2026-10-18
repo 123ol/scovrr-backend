@@ -1,11 +1,13 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { test } = require('node:test');
+const mongoose = require('mongoose');
 
 const { User } = require('../src/modules/users/user.model');
 const { SearchHistory } = require('../src/modules/discovery/search-history.model');
 const { RecentlyViewed } = require('../src/modules/discovery/recently-viewed.model');
 const { preferenceForType, notificationAllowed } = require('../src/modules/notifications/notification.service');
+const { moderationNotificationDetails } = require('../src/modules/moderation/moderation.service');
 const { RefreshSession } = require('../src/modules/auth/refresh-session.model');
 const { safeSessionJSON } = require('../src/modules/auth/auth.service');
 const { AccountExportJob } = require('../src/modules/auth/account-export-job.model');
@@ -123,6 +125,20 @@ test('notification types map to user preference categories', () => {
   assert.equal(preferenceForType('promotion_available'), 'marketing');
   assert.equal(preferenceForType('payment_confirmed'), 'orderUpdates');
   assert.equal(preferenceForType('security_alert'), 'security');
+});
+
+test('approved product and service moderation decisions produce seller notification payloads', () => {
+  const businessId = new mongoose.Types.ObjectId();
+  const productId = new mongoose.Types.ObjectId();
+  const serviceId = new mongoose.Types.ObjectId();
+  const productNotification = moderationNotificationDetails('product', 'approved', { _id: productId, businessId, name: 'Brown tote bag' });
+  const serviceNotification = moderationNotificationDetails('service', 'approved', { _id: serviceId, businessId, name: 'Bridal makeup' });
+  assert.equal(productNotification.type, 'product_approved');
+  assert.equal(productNotification.data.productId, productId.toString());
+  assert.equal(productNotification.data.businessId, businessId.toString());
+  assert.match(productNotification.body, /Brown tote bag/);
+  assert.equal(serviceNotification.type, 'service_approved');
+  assert.equal(serviceNotification.data.serviceId, serviceId.toString());
 });
 
 test('notification preference enforcement blocks only the opted-out category', async () => {
