@@ -17,6 +17,7 @@ router.post('/:businessId/catalogue/products/import-jobs', requireAuth, requireB
 router.get('/:businessId/catalogue/products/import-jobs/:importJobId', requireAuth, requireBusinessPermission('products.read'), validate(productImportJobIdSchema), controller.getCsvImport);
 router.patch('/:businessId/catalogue/products/bulk', requireAuth, requireBusinessPermission('products.update'), validate(bulkUpdateProductSchema), controller.bulkUpdate);
 router.patch('/:businessId/catalogue/products/:productId', requireAuth, requireBusinessPermission('products.update'), validate(updateProductSchema), controller.update);
+router.delete('/:businessId/catalogue/products/:productId', requireAuth, requireBusinessPermission('products.update'), validate(productIdSchema), controller.archive);
 router.post('/:businessId/catalogue/products/:productId/submit', requireAuth, requireBusinessPermission('products.update'), validate(productIdSchema), controller.submit);
 router.post('/:businessId/catalogue/products/:productId/inventory', requireAuth, requireBusinessPermission('inventory.adjust'), validate(inventoryAdjustmentSchema), controller.adjustInventory);
 

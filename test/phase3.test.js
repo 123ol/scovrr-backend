@@ -12,6 +12,7 @@ const { Order } = require('../src/modules/orders/order.model');
 const { normalizeVariants } = require('../src/modules/products/product.service');
 const productService = require('../src/modules/products/product.service');
 const productAdminRoutes = require('../src/modules/products/product.admin.routes');
+const productBusinessRoutes = require('../src/modules/products/product.business.routes');
 const { targetValues } = require('../src/modules/inventory/inventory.service');
 const { addItemSchema } = require('../src/modules/cart/cart.validation');
 const { Cart } = require('../src/modules/cart/cart.model');
@@ -65,6 +66,20 @@ test('admin product operations expose a protected live-product suspension action
   assert.ok(suspendRoute);
   assert.equal(Product.schema.path('status').enumValues.includes('archived'), true);
   assert.equal(Product.schema.path('moderationStatus').enumValues.includes('removed'), true);
+});
+
+test('seller product operations expose edit and safe archive actions', () => {
+  const updateRoute = productBusinessRoutes.stack.find((layer) => layer.route?.path === '/:businessId/catalogue/products/:productId' && layer.route.methods.patch);
+  const archiveRoute = productBusinessRoutes.stack.find((layer) => layer.route?.path === '/:businessId/catalogue/products/:productId' && layer.route.methods.delete);
+  assert.ok(updateRoute);
+  assert.ok(archiveRoute);
+  assert.equal(typeof productService.archiveProduct, 'function');
+  assert.equal(Product.schema.path('status').enumValues.includes('archived'), true);
+});
+
+test('seller catalogue hides archived products by default while retaining an explicit archive filter', () => {
+  assert.deepEqual(productService.businessProductFilter(objectId), { businessId: objectId, status: { $ne: 'archived' } });
+  assert.deepEqual(productService.businessProductFilter(objectId, 'archived'), { businessId: objectId, status: 'archived' });
 });
 
 test('saved collections extend existing favorites without duplicating saved-item records', () => {

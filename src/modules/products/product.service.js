@@ -131,13 +131,29 @@ async function updateProduct(business, productId, input, actorId = null) {
     const variants = await Promise.all(input.variants.map(async (variant) => ({ ...variant, media: await sanitizeCatalogueMedia({ businessId: business._id, actorId, media: variant.media, field: 'Product variant media' }) })));
     product.variants = normalizeVariants(variants, input.basePriceMinor || product.basePriceMinor, product.variants);
   }
-  if (product.status === 'active' || product.status === 'sold_out') {
+  if (product.status === 'active' || product.status === 'sold_out' || product.status === 'pending_review') {
     product.status = 'draft';
     product.moderationStatus = 'pending';
     product.publishedAt = null;
   }
   await product.save();
   if (priceChanged) await ProductPriceHistory.create({ productId: product._id, businessId: business._id, actorId, basePriceMinor: product.basePriceMinor, currency: product.currency, variants: product.variants.map((variant) => ({ variantId: variant.variantId, name: variant.name, priceMinor: variant.priceMinor, currency: product.currency })) });
+  return product;
+}
+
+async function archiveProduct(business, productId) {
+  const product = await Product.findOne({ _id: productId, businessId: business._id });
+  if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+  const hasProductReservations = product.reservedQuantity > 0;
+  const hasVariantReservations = product.variants.some((variant) => variant.reservedQuantity > 0);
+  if (hasProductReservations || hasVariantReservations) {
+    throw new AppError(409, 'PRODUCT_DELETE_RESERVED', 'This product cannot be deleted while items are reserved for checkout');
+  }
+  if (product.status !== 'archived') {
+    product.status = 'archived';
+    product.publishedAt = null;
+    await product.save();
+  }
   return product;
 }
 
@@ -350,9 +366,12 @@ async function similarPublicProducts(slug, { limit = 8 } = {}) {
   return { sourceProductId: source._id.toString(), products: visible.map((product) => ({ ...product.toCardJSON(), business: { id: product.businessId._id.toString(), name: product.businessId.name, slug: product.businessId.slug } })) };
 }
 
+function businessProductFilter(businessId, status) {
+  return { businessId, ...(status ? { status } : { status: { $ne: 'archived' } }) };
+}
+
 async function listBusinessProducts(businessId, { status, page, limit }) {
-  const filter = { businessId };
-  if (status) filter.status = status;
+  const filter = businessProductFilter(businessId, status);
   const skip = (page - 1) * limit;
   const [products, total] = await Promise.all([Product.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit), Product.countDocuments(filter)]);
   return { products, total, page, limit, pages: Math.ceil(total / limit) };
@@ -386,4 +405,4 @@ async function reviewProduct(productId, adminId, decision, reason) {
   return product;
 }
 
-module.exports = { createProduct, updateProduct, bulkUpdateProducts, bulkCreateProductDrafts, parseCsvProductDrafts, findDuplicateProducts, duplicateProductFilter, exportBusinessProducts, submitProduct, listPublicProducts, getPublicProduct, comparePublicProducts, similarPublicProducts, listBusinessProducts, listAdminProducts, reviewProduct, normalizeVariants, uniqueProductSlug, publicProductFilter, escapeRegExp, validateCategory };
+module.exports = { createProduct, updateProduct, archiveProduct, bulkUpdateProducts, bulkCreateProductDrafts, parseCsvProductDrafts, findDuplicateProducts, duplicateProductFilter, businessProductFilter, exportBusinessProducts, submitProduct, listPublicProducts, getPublicProduct, comparePublicProducts, similarPublicProducts, listBusinessProducts, listAdminProducts, reviewProduct, normalizeVariants, uniqueProductSlug, publicProductFilter, escapeRegExp, validateCategory };

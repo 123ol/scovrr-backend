@@ -21,6 +21,12 @@ const update = asyncHandler(async (req, res) => {
   return sendSuccess(res, { product: product.toOwnerJSON() });
 });
 
+const archive = asyncHandler(async (req, res) => {
+  const product = await productService.archiveProduct(req.business, req.params.productId);
+  await recordAudit({ actorId: req.auth.userId, actorType: 'user', action: 'PRODUCT_MODERATED', targetType: 'product', targetId: product._id, reason: 'seller_archived', after: product.toOwnerJSON(), ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null });
+  return sendSuccess(res, { product: product.toOwnerJSON() });
+});
+
 const bulkUpdate = asyncHandler(async (req, res) => {
   const products = await productService.bulkUpdateProducts(req.business, req.body.updates, req.auth.userId);
   return sendSuccess(res, { products: products.map((product) => product.toOwnerJSON()), updated: products.length });
@@ -119,4 +125,4 @@ const adminSuspend = asyncHandler(async (req, res) => {
   return sendSuccess(res, { product: suspendedProduct.toOwnerJSON() });
 });
 
-module.exports = { create, update, bulkCreate, bulkCreateCsv, requestCsvImport, getCsvImport, bulkUpdate, submit, manageList, duplicates, exportProducts, publicList, compare, similar, publicBySlug, adjustInventory, adminList, adminApprove, adminReject, adminSuspend };
+module.exports = { create, update, archive, bulkCreate, bulkCreateCsv, requestCsvImport, getCsvImport, bulkUpdate, submit, manageList, duplicates, exportProducts, publicList, compare, similar, publicBySlug, adjustInventory, adminList, adminApprove, adminReject, adminSuspend };
