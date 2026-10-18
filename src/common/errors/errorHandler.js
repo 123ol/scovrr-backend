@@ -1,11 +1,12 @@
 const { AppError } = require('./AppError');
 const { env } = require('../../config/env');
+const { captureException } = require('../observability/logger');
 
 function notFoundHandler(req, _res, next) {
   next(new AppError(404, 'NOT_FOUND', `Route ${req.method} ${req.originalUrl} was not found`));
 }
 
-function errorHandler(error, _req, res, _next) {
+function errorHandler(error, req, res, _next) {
   let normalized = error;
 
   if (error?.name === 'ZodError') {
@@ -23,7 +24,13 @@ function errorHandler(error, _req, res, _next) {
   }
 
   if (normalized.statusCode >= 500) {
-    console.error(error);
+    captureException(error, {
+      requestId: req.requestId,
+      method: req.method,
+      path: req.path,
+      statusCode: normalized.statusCode,
+      errorCode: normalized.code
+    });
   }
 
   const response = {

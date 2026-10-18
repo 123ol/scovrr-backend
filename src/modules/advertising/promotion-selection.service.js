@@ -1,6 +1,7 @@
 const { PromotionCampaign } = require('./promotion-campaign.model');
 const { BusinessLocation } = require('../businesses/business-location.model');
 const { createPlacementToken } = require('./promotion-event.service');
+const { logger } = require('../../common/observability/logger');
 
 function placementFor(query) {
   if (query.q) return 'SEARCH_RESULTS';
@@ -46,7 +47,7 @@ async function mixCollection(items, targetType, query, placement, limit = 2) {
 }
 
 async function safeMix(items, targetType, query, placement) {
-  try { return await mixCollection(items, targetType, query, placement); } catch (error) { console.error('Promotion selection failed:', error.message); return items; }
+  try { return await mixCollection(items, targetType, query, placement); } catch (error) { logger.error('promotion.selection.failed', { error: { name: error.name, code: error.code, message: error.message } }); return items; }
 }
 
 async function mixDiscovery(result, query) {

@@ -7,6 +7,8 @@ const { env, assertRuntimeConfig } = require('./config/env');
 const { connectDatabase } = require('./config/database');
 const { AppError } = require('./common/errors/AppError');
 const { errorHandler, notFoundHandler } = require('./common/errors/errorHandler');
+const { requestLogger } = require('./common/observability/request-logger');
+const { publicCacheHeaders } = require('./common/http/public-cache');
 const authRoutes = require('./modules/auth/auth.routes');
 const adminRoutes = require('./modules/admin/admin.routes');
 const categoryRoutes = require('./modules/categories/category.routes');
@@ -19,6 +21,7 @@ const cartRoutes = require('./modules/cart/cart.routes');
 const orderRoutes = require('./modules/orders/order.routes');
 const orderBusinessRoutes = require('./modules/orders/order.business.routes');
 const discoveryRoutes = require('./modules/discovery/discovery.routes');
+const recentlyViewedRoutes = require('./modules/discovery/recently-viewed.routes');
 const serviceBusinessRoutes = require('./modules/services/service.business.routes');
 const servicePublicRoutes = require('./modules/services/service.public.routes');
 const portfolioBusinessRoutes = require('./modules/services/portfolio.business.routes');
@@ -54,6 +57,7 @@ const businessAnalyticsRoutes = require('./modules/analytics/business-analytics.
 const platformAnalyticsRoutes = require('./modules/analytics/platform-analytics.routes');
 const contentPostBusinessRoutes = require('./modules/content-posts/content-post.business.routes');
 const contentPostPublicRoutes = require('./modules/content-posts/content-post.public.routes');
+const moderationAppealBusinessRoutes = require('./modules/moderation/moderation-appeal.business.routes');
 const catalogueUploadRoutes = require('./modules/media/catalogue-upload.routes');
 const homeSlideRoutes = require('./modules/home-slides/home-slide.routes');
 
@@ -90,6 +94,7 @@ function isLocalDevelopmentOrigin(origin) {
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
+app.use(requestLogger);
 app.use(helmet());
 app.use(cors({
   origin(origin, callback) {
@@ -102,6 +107,7 @@ app.use(cors({
 app.use('/api/v1/payments/webhooks/paystack', express.raw({ type: 'application/json', limit: '1mb' }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '100kb' }));
+app.use(publicCacheHeaders);
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 300,
@@ -154,6 +160,7 @@ app.use('/api/v1/home-slides', homeSlideRoutes);
 app.use('/api/v1', portfolioPublicRoutes);
 app.use('/api/v1/businesses', serviceBusinessRoutes);
 app.use('/api/v1/businesses', contentPostBusinessRoutes);
+app.use('/api/v1/businesses', moderationAppealBusinessRoutes);
 app.use('/api/v1/businesses', catalogueUploadRoutes);
 app.use('/api/v1/businesses', portfolioBusinessRoutes);
 app.use('/api/v1/businesses', availabilityBusinessRoutes);
@@ -187,6 +194,7 @@ app.use('/api/v1/subscription', subscriptionPublicRoutes);
 app.use('/api/v1/businesses', subscriptionBusinessRoutes);
 app.use('/api/v1/businesses', payoutBusinessRoutes);
 app.use('/api/v1/discover', discoveryRoutes);
+app.use('/api/v1/recently-viewed', recentlyViewedRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/admin/payments', paymentAdminRoutes);
 app.use('/api/v1/admin/payouts', payoutAdminRoutes);

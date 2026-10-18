@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-const EVIDENCE_PURPOSES = ['report', 'dispute', 'message'];
+const EVIDENCE_PURPOSES = ['report', 'dispute', 'message', 'verification', 'delivery'];
 const EVIDENCE_STATUSES = ['uploaded', 'attached', 'hidden', 'revoked'];
 const EVIDENCE_VISIBILITIES = ['parties', 'admin_only', 'submitter_and_admin'];
 
@@ -9,7 +9,7 @@ const evidenceAssetSchema = new mongoose.Schema({
   contextSubjectType: { type: String, default: null },
   contextSubjectId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
   disputeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Dispute', default: null, index: true },
-  subjectType: { type: String, enum: ['report', 'dispute', 'message'], default: null, index: true },
+  subjectType: { type: String, enum: ['report', 'dispute', 'message', 'verification', 'delivery'], default: null, index: true },
   subjectId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
   sessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'EvidenceUploadSession', required: true, unique: true },
   uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -26,11 +26,13 @@ const evidenceAssetSchema = new mongoose.Schema({
   visibility: { type: String, enum: EVIDENCE_VISIBILITIES, required: true },
   status: { type: String, enum: EVIDENCE_STATUSES, default: 'uploaded', index: true },
   attachedAt: { type: Date, default: null },
-  hiddenAt: { type: Date, default: null }
+  hiddenAt: { type: Date, default: null },
+  retentionExpiresAt: { type: Date, default: null, index: true }
 }, { timestamps: true, versionKey: false });
 
 evidenceAssetSchema.index({ subjectType: 1, subjectId: 1, status: 1, createdAt: -1 });
 evidenceAssetSchema.index({ uploadedBy: 1, status: 1, createdAt: -1 });
+evidenceAssetSchema.index({ retentionExpiresAt: 1, status: 1 });
 
 evidenceAssetSchema.methods.toSafeJSON = function toSafeJSON() {
   return {

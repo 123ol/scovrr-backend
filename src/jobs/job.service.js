@@ -1,5 +1,11 @@
 const crypto = require('node:crypto');
 const { Job } = require('./job.model');
+const { sanitizeErrorMessage } = require('../common/observability/logger');
+
+function safeJobError(error) {
+  const message = sanitizeErrorMessage(error?.message || String(error || 'Job failed'));
+  return message.length > 1_000 ? `${message.slice(0, 999)}…` : message;
+}
 
 function workerId() {
   return `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
@@ -31,9 +37,9 @@ async function failJob(jobId, lockOwner, error) {
   job.nextRunAt = new Date(Date.now() + delayMs);
   job.lockedAt = null;
   job.lockedBy = null;
-  job.lastError = error?.message || String(error);
+  job.lastError = safeJobError(error);
   await job.save();
   return job;
 }
 
-module.exports = { enqueueJob, claimNextJob, completeJob, failJob, workerId };
+module.exports = { enqueueJob, claimNextJob, completeJob, failJob, safeJobError, workerId };

@@ -22,6 +22,10 @@ function publicReference(value, type) {
   };
 }
 
+function publicReferences(values = [], type) {
+  return values.map((value) => publicReference(value, type)).filter(Boolean);
+}
+
 const mediaSchema = new mongoose.Schema({
   url: { type: String, required: true, trim: true, maxlength: 2_000 },
   provider: { type: String, trim: true, maxlength: 80 },
@@ -41,6 +45,9 @@ const contentPostSchema = new mongoose.Schema({
   media: { type: [mediaSchema], default: [] },
   linkedProductId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', default: null },
   linkedServiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service', default: null },
+  taggedProductIds: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }], default: [] },
+  taggedServiceIds: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Service' }], default: [] },
+  hashtags: { type: [{ type: String, trim: true, maxlength: 50 }], default: [] },
   likesCount: { type: Number, min: 0, default: 0 },
   commentsCount: { type: Number, min: 0, default: 0 },
   status: { type: String, enum: CONTENT_POST_STATUSES, default: 'draft', index: true },
@@ -51,6 +58,7 @@ const contentPostSchema = new mongoose.Schema({
 
 contentPostSchema.index({ businessId: 1, status: 1, createdAt: -1 });
 contentPostSchema.index({ status: 1, moderationStatus: 1, createdAt: -1 });
+contentPostSchema.index({ status: 1, moderationStatus: 1, publishedAt: -1, createdAt: -1 });
 
 contentPostSchema.methods.toOwnerJSON = function toOwnerJSON() {
   return {
@@ -63,6 +71,9 @@ contentPostSchema.methods.toOwnerJSON = function toOwnerJSON() {
     media: this.media,
     linkedProductId: idString(this.linkedProductId),
     linkedServiceId: idString(this.linkedServiceId),
+    taggedProductIds: this.taggedProductIds.map((id) => id.toString()),
+    taggedServiceIds: this.taggedServiceIds.map((id) => id.toString()),
+    hashtags: this.hashtags,
     commentsCount: this.commentsCount || 0,
     status: this.status,
     moderationStatus: this.moderationStatus,
@@ -73,7 +84,7 @@ contentPostSchema.methods.toOwnerJSON = function toOwnerJSON() {
   };
 };
 
-contentPostSchema.methods.toPublicJSON = function toPublicJSON({ likedByViewer = false } = {}) {
+contentPostSchema.methods.toPublicJSON = function toPublicJSON({ likedByViewer = false, savedByViewer = false } = {}) {
   return {
     id: this._id.toString(),
     businessId: idString(this.businessId),
@@ -84,9 +95,13 @@ contentPostSchema.methods.toPublicJSON = function toPublicJSON({ likedByViewer =
     linkedProductId: idString(this.linkedProductId),
     linkedServiceId: idString(this.linkedServiceId),
     reference: publicReference(this.linkedProductId, 'product') || publicReference(this.linkedServiceId, 'service'),
+    taggedProducts: publicReferences(this.taggedProductIds, 'product'),
+    taggedServices: publicReferences(this.taggedServiceIds, 'service'),
+    hashtags: this.hashtags,
     business: this.businessId?.name ? { id: idString(this.businessId), name: this.businessId.name, slug: this.businessId.slug } : null,
     likesCount: this.likesCount || 0,
     likedByViewer: Boolean(likedByViewer),
+    savedByViewer: Boolean(savedByViewer),
     commentsCount: this.commentsCount || 0,
     publishedAt: this.publishedAt,
     createdAt: this.createdAt

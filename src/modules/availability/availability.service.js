@@ -40,6 +40,14 @@ function eachDate(from, to) {
 function minutes(time) { const [hour, minute] = time.split(':').map(Number); return hour * 60 + minute; }
 function timeFromMinutes(value) { return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`; }
 function dateDayOfWeek(date) { return new Date(`${date}T12:00:00.000Z`).getUTCDay(); }
+function branchIntervalsForDate(location, date) {
+  if (!location) return null;
+  const special = location.specialHours?.find((item) => item.date === date);
+  if (special) return special.closed ? [] : (special.intervals || []);
+  const weekly = location.openingHours?.find((item) => item.dayOfWeek === dateDayOfWeek(date));
+  if (!weekly) return null;
+  return weekly.closed ? [] : (weekly.intervals || []);
+}
 function assertTimezone(timeZone) { try { new Intl.DateTimeFormat('en-US', { timeZone }).format(); } catch (_error) { throw new AppError(400, 'INVALID_TIMEZONE', 'The business timezone is invalid'); } }
 
 async function getRule(businessId, staffUserId = null, locationId = null) {
@@ -104,9 +112,8 @@ async function assertSlotAvailable({ businessId, locationId = null, staffUserId 
   const location = locationId ? await BusinessLocation.findOne({ _id: locationId, businessId, active: true }).select('openingHours specialHours timezone') : null;
   if (locationId && !location) throw new AppError(404, 'BUSINESS_LOCATION_NOT_FOUND', 'The selected business location is unavailable');
   const rule = await getRule(businessId, staffUserId, locationId);
-  const special = location?.specialHours?.find((item) => item.date === localDate);
-  const branchIntervals = special ? (special.closed ? [] : special.intervals) : (location?.openingHours?.find((item) => item.dayOfWeek === new Date(`${localDate}T12:00:00.000Z`).getUTCDay())?.intervals || null);
-  if (branchIntervals && (!branchIntervals.length || special?.closed)) throw new AppError(409, 'LOCATION_CLOSED', 'The selected branch is closed at this time');
+  const branchIntervals = branchIntervalsForDate(location, localDate);
+  if (branchIntervals && !branchIntervals.length) throw new AppError(409, 'LOCATION_CLOSED', 'The selected branch is closed at this time');
   const intervals = branchIntervals || intervalsForDate(rule, localDate);
   const effectiveStart = new Date(start.getTime() - bufferBeforeMinutes * 60_000);
   const effectiveEnd = new Date(end.getTime() + bufferAfterMinutes * 60_000);
@@ -174,4 +181,4 @@ async function deleteBlockedPeriod(businessId, blockId) {
   return block;
 }
 
-module.exports = { getZonedParts, zonedDateTimeToUtc, eachDate, intervalsForDate, getAvailabilityRule, saveAvailability, getAvailableSlots, assertSlotAvailable, createBlockedPeriod, deleteBlockedPeriod, hasConflict, listBlockedPeriods, releaseExpiredBookingHolds };
+module.exports = { getZonedParts, zonedDateTimeToUtc, eachDate, intervalsForDate, branchIntervalsForDate, getAvailabilityRule, saveAvailability, getAvailableSlots, assertSlotAvailable, createBlockedPeriod, deleteBlockedPeriod, hasConflict, listBlockedPeriods, releaseExpiredBookingHolds };

@@ -4,6 +4,9 @@ const service = require('./admin.service');
 const { recordAudit } = require('../audit/audit.service');
 const { AUDIT_ACTIONS } = require('../audit/audit-events');
 const userStatusService = require('../users/user-status.service');
+const trustSafetyService = require('./trust-safety.service');
+const operationsService = require('./operations.service');
+const authService = require('../auth/auth.service');
 
 function requestAuditMetadata(req) {
   return { ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null };
@@ -50,5 +53,26 @@ const reactivateUser = asyncHandler(async (req, res) => {
   await recordAudit({ actorId: req.auth.userId, action: AUDIT_ACTIONS.USER_REACTIVATED, targetType: 'user', targetId: result.target._id, reason: req.body.reason, before: { status: result.before }, after: { status: result.after }, ...requestAuditMetadata(req) });
   return sendSuccess(res, { user: result.target.toSafeJSON(), changed: result.changed });
 });
+const accountLifecyclePolicy = asyncHandler(async (_req, res) => sendSuccess(res, { policy: authService.getAccountLifecyclePolicy() }));
+const listAccountDeletionRequests = asyncHandler(async (req, res) => sendSuccess(res, await authService.listAccountDeletionRequests(req.query)));
+const getAccountDeletionRequest = asyncHandler(async (req, res) => {
+  const { AccountDeletionRequest } = require('../auth/account-deletion-request.model');
+  const request = await AccountDeletionRequest.findById(req.params.requestId).populate('userId', 'firstName lastName email accountType status');
+  if (!request) return res.status(404).json({ success: false, error: { code: 'DELETION_REQUEST_NOT_FOUND', message: 'Account deletion request not found' } });
+  return sendSuccess(res, { deletionRequest: { ...request.toSafeJSON(), user: request.userId?.email ? { id: request.userId._id.toString(), firstName: request.userId.firstName, lastName: request.userId.lastName, email: request.userId.email, accountType: request.userId.accountType, status: request.userId.status } : null } });
+});
+const reviewAccountDeletionRequest = asyncHandler(async (req, res) => {
+  const request = await authService.reviewAccountDeletionRequest(req.auth.userId, req.params.requestId, req.body.action, req.body.reason);
+  await recordAudit({ actorId: req.auth.userId, action: req.body.action === 'start_review' ? AUDIT_ACTIONS.ACCOUNT_DELETION_REVIEW_STARTED : AUDIT_ACTIONS.ACCOUNT_DELETION_REJECTED, targetType: 'account_deletion_request', targetId: request._id, reason: req.body.reason, after: { status: request.status }, ...requestAuditMetadata(req) });
+  return sendSuccess(res, { deletionRequest: request.toSafeJSON() });
+});
+const trustSafetyOverview = asyncHandler(async (_req, res) => sendSuccess(res, { trustSafety: await trustSafetyService.getTrustSafetyOverview() }));
+const operationsHealth = asyncHandler(async (_req, res) => sendSuccess(res, { operations: await operationsService.getOperationsHealth() }));
+const deadJobs = asyncHandler(async (req, res) => sendSuccess(res, { jobs: await operationsService.listDeadJobs(req.query) }));
+const replayJob = asyncHandler(async (req, res) => {
+  const job = await operationsService.replayDeadJob(req.params.jobId);
+  await recordAudit({ actorId: req.auth.userId, action: AUDIT_ACTIONS.JOB_REPLAYED, targetType: 'job', targetId: req.params.jobId, reason: req.body.reason, metadata: { jobType: job.type, attemptsReset: true }, ...requestAuditMetadata(req) });
+  return sendSuccess(res, { job });
+});
 
-module.exports = { me, list, listUsers, roles, invite, acceptInvitation, updateRoles, suspend, reactivate, suspendUser, reactivateUser };
+module.exports = { me, list, listUsers, roles, invite, acceptInvitation, updateRoles, suspend, reactivate, suspendUser, reactivateUser, accountLifecyclePolicy, listAccountDeletionRequests, getAccountDeletionRequest, reviewAccountDeletionRequest, trustSafetyOverview, operationsHealth, deadJobs, replayJob };

@@ -8,7 +8,12 @@ const { Booking } = require('../bookings/booking.model');
 const { Conversation } = require('./conversation.model');
 const { Message } = require('./message.model');
 const { EvidenceAsset } = require('../evidence/evidence-asset.model');
+const { Report } = require('../reports/report.model');
 const { assertUserCanActById } = require('../users/user-status.service');
+
+const ACTIVE_SUPPORT_REPORT_STATUSES = ['open', 'in_review', 'action_required'];
+const MESSAGE_CONVERSATION_RATE_LIMIT = 20;
+const MESSAGE_ACCOUNT_RATE_LIMIT = 60;
 
 function assertBuyerCanStartConversation(user) {
   if (user?.accountType !== 'buyer') throw new AppError(403, 'BUYER_INITIATED_CONVERSATION_ONLY', 'Only buyers can start new conversations with businesses');
@@ -22,12 +27,29 @@ function makeConversationKey(participantIds, contextType, contextId) {
   return `${participantIds.map((id) => id.toString()).sort().join(',')}:${contextType}:${contextId?.toString() || 'none'}`;
 }
 
+function escapeRegex(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function conversationFilter(userId, query = {}) {
+  const filter = { participantIds: userId };
+  if (query.contextType) filter.contextType = query.contextType;
+  if (query.archived === true) filter.archivedBy = userId;
+  if (query.archived === false) filter.archivedBy = { $ne: userId };
+  if (query.q) {
+    const pattern = new RegExp(escapeRegex(query.q.trim()), 'i');
+    filter.$or = [{ lastMessagePreview: pattern }, { 'contextSnapshot.businessName': pattern }, { 'contextSnapshot.productName': pattern }, { 'contextSnapshot.serviceName': pattern }];
+  }
+  return filter;
+}
+
+function activeSupportEscalationFilter(userId, conversationId) {
+  return { reporterId: userId, subjectType: 'conversation', subjectId: conversationId, reason: 'support_escalation', status: { $in: ACTIVE_SUPPORT_REPORT_STATUSES } };
+}
+
 async function resolveContext(userId, input) {
   const business = await Business.findOne({ _id: input.businessId, status: 'active', moderationStatus: 'approved' });
   if (!business) throw new AppError(404, 'BUSINESS_NOT_FOUND', 'Business not found');
   let contextSnapshot = { businessId: business._id.toString(), businessName: business.name };
-  if (input.contextType === 'product') { const product = await Product.findOne({ _id: input.contextId, businessId: business._id }); if (!product) throw new AppError(404, 'CONTEXT_NOT_FOUND', 'Product context not found'); contextSnapshot = { ...contextSnapshot, productId: product._id.toString(), productName: product.name, priceMinor: product.basePriceMinor, currency: product.currency }; }
-  if (input.contextType === 'service') { const service = await Service.findOne({ _id: input.contextId, businessId: business._id }); if (!service) throw new AppError(404, 'CONTEXT_NOT_FOUND', 'Service context not found'); contextSnapshot = { ...contextSnapshot, serviceId: service._id.toString(), serviceName: service.name, priceMinor: service.basePriceMinor, currency: service.currency }; }
+  if (input.contextType === 'product') { const product = await Product.findOne({ _id: input.contextId, businessId: business._id }); if (!product) throw new AppError(404, 'CONTEXT_NOT_FOUND', 'Product context not found'); contextSnapshot = { ...contextSnapshot, productId: product._id.toString(), productName: product.name, productSlug: product.slug, priceMinor: product.basePriceMinor, currency: product.currency }; }
+  if (input.contextType === 'service') { const service = await Service.findOne({ _id: input.contextId, businessId: business._id }); if (!service) throw new AppError(404, 'CONTEXT_NOT_FOUND', 'Service context not found'); contextSnapshot = { ...contextSnapshot, serviceId: service._id.toString(), serviceName: service.name, serviceSlug: service.slug, priceMinor: service.basePriceMinor, currency: service.currency }; }
   if (input.contextType === 'order') { const order = await Order.findOne({ _id: input.contextId, customerId: userId, businessIds: business._id }); if (!order) throw new AppError(404, 'CONTEXT_NOT_FOUND', 'Order context not found'); contextSnapshot = { ...contextSnapshot, orderId: order._id.toString(), orderNumber: order.orderNumber }; }
   if (input.contextType === 'booking') { const booking = await Booking.findOne({ _id: input.contextId, customerId: userId, businessId: business._id }); if (!booking) throw new AppError(404, 'CONTEXT_NOT_FOUND', 'Booking context not found'); contextSnapshot = { ...contextSnapshot, bookingId: booking._id.toString(), bookingNumber: booking.bookingNumber }; }
   const owner = await BusinessMembership.findOne({ businessId: business._id, role: 'owner', status: 'active' }).select('userId');
@@ -42,12 +64,20 @@ async function createConversation(userId, input) {
   const participantIds = [userId, context.ownerId].sort((a, b) => a.toString().localeCompare(b.toString()));
   const conversationKey = makeConversationKey(participantIds, input.contextType, input.contextId || null);
   let conversation = await Conversation.findOne({ conversationKey });
+  let created = false;
   if (!conversation) {
     try {
       conversation = await Conversation.create({ participantIds, conversationKey, contextType: input.contextType, contextId: input.contextId || null, contextSnapshot: context.contextSnapshot });
+      created = true;
     } catch (error) {
       if (error?.code !== 11000) throw error;
       conversation = await Conversation.findOne({ conversationKey });
+    }
+    if (created && context.business.messaging?.greetingEnabled && context.business.messaging.greetingText) {
+      await Message.create({ conversationId: conversation._id, senderId: context.ownerId, type: 'system', body: context.business.messaging.greetingText, readBy: [userId], deliveredAt: new Date() });
+      conversation.lastMessagePreview = context.business.messaging.greetingText;
+      conversation.lastMessageAt = new Date();
+      await conversation.save();
     }
   }
   if (input.body) await sendMessage(userId, conversation._id, { type: 'text', body: input.body, media: [] });
@@ -55,13 +85,38 @@ async function createConversation(userId, input) {
 }
 
 async function getConversation(userId, conversationId) { const conversation = await Conversation.findOne({ _id: conversationId, participantIds: userId }); if (!conversation) throw new AppError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found'); return conversation; }
-async function listConversations(userId, query) { const skip = (query.page - 1) * query.limit; const filter = { participantIds: userId }; const [items, total] = await Promise.all([Conversation.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(query.limit), Conversation.countDocuments(filter)]); return { conversations: items.map((item) => item.toSafeJSON(userId)), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) }; }
+async function escalateConversation(userId, conversationId, input) {
+  await getConversation(userId, conversationId);
+  const existing = await Report.findOne(activeSupportEscalationFilter(userId, conversationId));
+  if (existing) return existing;
+  const { createReport } = require('../reports/report.service');
+  return createReport(userId, { subjectType: 'conversation', subjectId: conversationId, reason: 'support_escalation', details: input.details });
+}
+async function listConversations(userId, query) { const skip = (query.page - 1) * query.limit; const filter = conversationFilter(userId, query); const [items, total] = await Promise.all([Conversation.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(query.limit), Conversation.countDocuments(filter)]); return { conversations: items.map((item) => item.toSafeJSON(userId)), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) }; }
 async function listMessages(userId, conversationId, query) { await getConversation(userId, conversationId); const skip = (query.page - 1) * query.limit; const filter = { conversationId }; const [items, total] = await Promise.all([Message.find(filter).sort({ createdAt: -1 }).skip(skip).limit(query.limit), Message.countDocuments(filter)]); return { messages: items.reverse().map((item) => item.toSafeJSON()), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) }; }
+async function searchMessages(userId, query) {
+  const filter = conversationFilter(userId, { ...query, q: undefined });
+  const conversations = await Conversation.find(filter).select('_id participantIds contextType contextId contextSnapshot lastMessagePreview lastMessageAt archivedBy createdAt updatedAt').limit(500).lean();
+  if (!conversations.length) return { messages: [], total: 0, page: query.page, limit: query.limit, pages: 0 };
+  const messageFilter = { conversationId: { $in: conversations.map((item) => item._id) }, body: new RegExp(escapeRegex(query.q.trim()), 'i') };
+  const skip = (query.page - 1) * query.limit;
+  const [items, total] = await Promise.all([Message.find(messageFilter).sort({ createdAt: -1 }).skip(skip).limit(query.limit), Message.countDocuments(messageFilter)]);
+  const conversationById = new Map(conversations.map((item) => [item._id.toString(), item]));
+  return { messages: items.map((item) => ({ message: item.toSafeJSON(), conversation: conversationById.get(item.conversationId.toString()) ? { id: item.conversationId.toString(), contextType: conversationById.get(item.conversationId.toString()).contextType, contextId: conversationById.get(item.conversationId.toString()).contextId?.toString() || null, contextSnapshot: conversationById.get(item.conversationId.toString()).contextSnapshot, archived: (conversationById.get(item.conversationId.toString()).archivedBy || []).some((id) => id.toString() === userId.toString()) } : null })), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+}
+async function archiveConversation(userId, conversationId, archived) { const conversation = await Conversation.findOneAndUpdate({ _id: conversationId, participantIds: userId }, archived ? { $addToSet: { archivedBy: userId } } : { $pull: { archivedBy: userId } }, { new: true }); if (!conversation) throw new AppError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found'); return conversation; }
 async function sendMessage(userId, conversationId, input) {
   const user = await assertUserCanActById(userId);
   const conversation = await getConversation(userId, conversationId);
   const hasBuyerMessage = user.accountType !== 'seller' || Boolean(await Message.exists({ conversationId, senderId: { $ne: userId } }));
   assertSellerCanReply(user, hasBuyerMessage);
+  const windowStart = new Date(Date.now() - 60_000);
+  const [recentMessageCount, recentAccountMessageCount] = await Promise.all([
+    Message.countDocuments({ conversationId, senderId: userId, createdAt: { $gte: windowStart } }),
+    Message.countDocuments({ senderId: userId, createdAt: { $gte: windowStart } })
+  ]);
+  if (recentMessageCount >= MESSAGE_CONVERSATION_RATE_LIMIT) throw new AppError(429, 'MESSAGE_RATE_LIMIT', 'You are sending messages too quickly in this conversation. Please try again shortly.');
+  if (recentAccountMessageCount >= MESSAGE_ACCOUNT_RATE_LIMIT) throw new AppError(429, 'MESSAGE_ACCOUNT_RATE_LIMIT', 'You are sending messages too quickly. Please try again shortly.');
   const media = input.media || [];
   const evidenceIds = [...new Set(media.map((item) => item.evidenceId).filter(Boolean).map(String))];
   if (evidenceIds.length) {
@@ -74,4 +129,4 @@ async function sendMessage(userId, conversationId, input) {
 }
 async function markRead(userId, conversationId) { const conversation = await getConversation(userId, conversationId); await Message.updateMany({ conversationId, senderId: { $ne: userId }, readBy: { $ne: userId } }, { $addToSet: { readBy: userId } }); return conversation; }
 
-module.exports = { assertBuyerCanStartConversation, assertSellerCanReply, makeConversationKey, resolveContext, createConversation, getConversation, listConversations, listMessages, sendMessage, markRead };
+module.exports = { assertBuyerCanStartConversation, assertSellerCanReply, makeConversationKey, activeSupportEscalationFilter, resolveContext, createConversation, getConversation, escalateConversation, listConversations, listMessages, searchMessages, archiveConversation, sendMessage, markRead, MESSAGE_CONVERSATION_RATE_LIMIT, MESSAGE_ACCOUNT_RATE_LIMIT };

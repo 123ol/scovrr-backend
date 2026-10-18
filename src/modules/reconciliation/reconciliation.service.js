@@ -6,6 +6,7 @@ const { PaymentReconciliation } = require('./reconciliation.model');
 const { recordAudit } = require('../audit/audit.service');
 const { getPaymentProvider } = require('../../integrations/payments');
 const { PromotionFunding } = require('../advertising/promotion-funding.model');
+const { logger } = require('../../common/observability/logger');
 
 function reconciliationRunId() {
   return `SCV-REC-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
@@ -92,7 +93,7 @@ async function resolveReconciliation(reconciliationId, adminId, input) {
 async function runScheduledReconciliation() {
   try {
     const result = await runReconciliation({ limit: 25 });
-    try { await recordAudit({ actorType: 'system', action: 'RECONCILIATION_RUN', targetType: 'payment_reconciliation_run', metadata: { runId: result.runId, provider: 'paystack', limit: 25, scheduled: true } }); } catch (auditError) { console.error('Unable to record reconciliation audit event:', auditError.message); }
+    try { await recordAudit({ actorType: 'system', action: 'RECONCILIATION_RUN', targetType: 'payment_reconciliation_run', metadata: { runId: result.runId, provider: 'paystack', limit: 25, scheduled: true } }); } catch (auditError) { logger.error('reconciliation.audit.failed', { error: { name: auditError.name, code: auditError.code, message: auditError.message } }); }
     return result;
   } catch (error) { if (error.code === 'PAYMENT_PROVIDER_NOT_CONFIGURED') return { skipped: true, code: error.code }; throw error; }
 }

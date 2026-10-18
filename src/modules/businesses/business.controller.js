@@ -1,6 +1,7 @@
 const { asyncHandler } = require('../../common/http/asyncHandler');
 const { sendSuccess } = require('../../common/http/response');
 const businessService = require('./business.service');
+const businessRiskService = require('./business-risk.service');
 const { recordAudit } = require('../audit/audit.service');
 const { AUDIT_ACTIONS } = require('../audit/audit-events');
 const { BusinessLocation } = require('./business-location.model');
@@ -15,7 +16,17 @@ const mine = asyncHandler(async (req, res) => sendSuccess(res, { businesses: awa
 const publicBySlug = asyncHandler(async (req, res) => {
   const business = await businessService.getPublicBusinessBySlug(req.params.slug);
   const locations = await BusinessLocation.find({ businessId: business._id, active: true, publiclyVisible: true }).sort({ primary: -1, createdAt: 1 });
-  return sendSuccess(res, { business: business.toPublicJSON(), locations: locations.map((location) => location.toJSONSafe(false)) });
+  return sendSuccess(res, { business: { ...business.toPublicJSON(), storefront: await businessService.getPublicStorefront(business) }, locations: locations.map((location) => location.toJSONSafe(false)) });
+});
+
+const updateStorefront = asyncHandler(async (req, res) => {
+  const business = await businessService.updateStorefront(req.business, req.body);
+  return sendSuccess(res, { business: business.toOwnerJSON() });
+});
+
+const updateMessaging = asyncHandler(async (req, res) => {
+  const business = await businessService.updateMessaging(req.business, req.body);
+  return sendSuccess(res, { business: business.toOwnerJSON() });
 });
 
 const updateCapabilities = asyncHandler(async (req, res) => {
@@ -48,6 +59,12 @@ const submit = asyncHandler(async (req, res) => {
   return sendSuccess(res, { business: business.toOwnerJSON() });
 });
 
+const attachVerificationEvidence = asyncHandler(async (req, res) => {
+  const business = await businessService.attachVerificationEvidence(req.business, req.auth.userId, req.body.evidenceAssetIds);
+  await recordAudit({ actorId: req.auth.userId, action: AUDIT_ACTIONS.VERIFICATION_EVIDENCE_ATTACHED, targetType: 'business', targetId: business._id, metadata: { evidenceCount: req.body.evidenceAssetIds.length }, ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null });
+  return sendSuccess(res, { business: business.toOwnerJSON() });
+});
+
 const adminList = asyncHandler(async (req, res) => {
   const result = await businessService.listBusinessesForAdmin(req.query);
   return sendSuccess(res, { ...result, businesses: result.businesses.map((business) => business.toOwnerJSON()) });
@@ -56,6 +73,7 @@ const adminDetail = asyncHandler(async (req, res) => {
   const detail = await businessService.getAdminDetail(req.params.businessId);
   return sendSuccess(res, { business: detail.business.toOwnerJSON(), locations: detail.locations.map((location) => location.toJSONSafe(true)), members: detail.members.map((member) => ({ ...member.toJSONSafe(), user: member.userId ? { id: member.userId._id.toString(), firstName: member.userId.firstName, lastName: member.userId.lastName, email: member.userId.email, status: member.userId.status } : null })), counts: detail.counts });
 });
+const adminRisk = asyncHandler(async (req, res) => sendSuccess(res, await businessRiskService.listRiskSignals(req.query)));
 
 const adminApprove = asyncHandler(async (req, res) => {
   const business = await businessService.reviewBusiness(req.params.businessId, req.auth.userId, 'approve');
@@ -66,6 +84,11 @@ const adminApprove = asyncHandler(async (req, res) => {
 const adminReject = asyncHandler(async (req, res) => {
   const business = await businessService.reviewBusiness(req.params.businessId, req.auth.userId, 'reject', req.body);
   await recordAudit({ actorId: req.auth.userId, action: 'VERIFICATION_REJECTED', targetType: 'business', targetId: business._id, reason: req.body.reason, after: business.toOwnerJSON(), ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null });
+  return sendSuccess(res, { business: business.toOwnerJSON() });
+});
+const adminRequestInformation = asyncHandler(async (req, res) => {
+  const business = await businessService.reviewBusiness(req.params.businessId, req.auth.userId, 'request_information', req.body);
+  await recordAudit({ actorId: req.auth.userId, action: AUDIT_ACTIONS.VERIFICATION_INFORMATION_REQUESTED, targetType: 'business', targetId: business._id, reason: req.body.reason, after: business.toOwnerJSON(), ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null });
   return sendSuccess(res, { business: business.toOwnerJSON() });
 });
 
@@ -81,4 +104,4 @@ const adminReactivate = asyncHandler(async (req, res) => {
   return sendSuccess(res, { business: result.business.toOwnerJSON() });
 });
 
-module.exports = { create, mine, publicBySlug, updateCapabilities, addLocation, listLocations, listPrivateLocations, updateLocation, submit, adminList, adminDetail, adminApprove, adminReject, adminSuspend, adminReactivate };
+module.exports = { create, mine, publicBySlug, updateStorefront, updateMessaging, updateCapabilities, addLocation, listLocations, listPrivateLocations, updateLocation, submit, attachVerificationEvidence, adminList, adminDetail, adminRisk, adminApprove, adminReject, adminRequestInformation, adminSuspend, adminReactivate };

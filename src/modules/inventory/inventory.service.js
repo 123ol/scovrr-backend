@@ -6,6 +6,8 @@ const { InventoryMovement } = require('./inventory-movement.model');
 const { InventoryReservation } = require('./inventory-reservation.model');
 const { InventoryPosition } = require('./inventory-position.model');
 const { StockTransfer } = require('./stock-transfer.model');
+const { BusinessMembership } = require('../businesses/business-membership.model');
+const { createNotification } = require('../notifications/notification.service');
 
 function variantKey(variantId) { return variantId ? variantId.toString() : 'base'; }
 
@@ -217,4 +219,68 @@ async function listPositions({ businessId, locationId, productId, page = 1, limi
   return { positions: positions.map((position) => ({ ...position.toSafeJSON(), product: productMap.get(position.productId.toString()) || null })), total, page, limit, pages: Math.ceil(total / limit) };
 }
 
-module.exports = { targetValues, primaryLocation, ensurePosition, refreshAvailability, adjustInventory, reserveStock, releaseReservation, releaseExpiredReservations, releaseOrderReservations, consumeOrderReservations, transferStock, listPositions, variantKey };
+async function forecast({ businessId, locationId = null, productId = null, days = 30 }) {
+  const since = new Date(Date.now() - days * 86_400_000);
+  const positions = await InventoryPosition.find({ businessId, ...(locationId ? { locationId } : {}), ...(productId ? { productId } : {}) }).select('productId variantId locationId quantityAvailable lowStockThreshold').lean();
+  const sales = await InventoryMovement.aggregate([{ $match: { businessId, type: 'sale', createdAt: { $gte: since }, ...(locationId ? { locationId } : {}), ...(productId ? { productId } : {}) } }, { $group: { _id: { productId: '$productId', variantId: '$variantId', locationId: '$locationId' }, unitsSold: { $sum: { $abs: '$quantityDelta' } } } }]);
+  const products = await Product.find({ _id: { $in: positions.map((item) => item.productId) } }).select('name slug').lean();
+  const rows = positions.map((position) => {
+    const sale = sales.find((item) => String(item._id.productId) === String(position.productId) && String(item._id.variantId || '') === String(position.variantId || '') && String(item._id.locationId || '') === String(position.locationId || ''));
+    const unitsSold = sale?.unitsSold || 0;
+    const dailyAverage = Number((unitsSold / days).toFixed(2));
+    const daysOfCover = dailyAverage > 0 ? Number((position.quantityAvailable / dailyAverage).toFixed(1)) : null;
+    return { ...position, id: position._id.toString(), product: products.find((item) => item._id.toString() === position.productId.toString()) || null, unitsSold, dailyAverage, daysOfCover, restockRecommended: position.quantityAvailable <= position.lowStockThreshold || (daysOfCover !== null && daysOfCover <= 7) };
+  });
+  return { periodDays: days, since, positions: rows.sort((a, b) => Number(b.restockRecommended) - Number(a.restockRecommended) || (a.daysOfCover ?? Infinity) - (b.daysOfCover ?? Infinity)) };
+}
+
+function inventoryForecastCsv(positions = []) {
+  const cell = (value) => { const text = value === null || value === undefined ? '' : String(value); return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text; };
+  const header = ['product_id', 'product_name', 'location_id', 'quantity_on_hand', 'quantity_reserved', 'quantity_available', 'low_stock_threshold', 'units_sold', 'daily_average', 'days_of_cover', 'restock_recommended'];
+  const rows = positions.map((position) => [position.productId, position.product?.name || '', position.locationId, position.quantityOnHand, position.quantityReserved, position.quantityAvailable, position.lowStockThreshold, position.unitsSold, position.dailyAverage, position.daysOfCover, position.restockRecommended].map(cell).join(','));
+  return [header.join(','), ...rows].join('\n') + '\n';
+}
+
+async function processLowStockAlerts({ now = new Date(), limit = 500 } = {}) {
+  const dayKey = now.toISOString().slice(0, 10);
+  const positions = await InventoryPosition.find({ inventoryTracking: true, $expr: { $lte: ['$quantityAvailable', '$lowStockThreshold'] } }).sort({ quantityAvailable: 1, updatedAt: 1 }).limit(Math.min(Math.max(limit, 1), 500)).lean();
+  if (!positions.length) return { positions: 0, notifications: 0 };
+  const businessIds = [...new Set(positions.map((position) => position.businessId.toString()))];
+  const productIds = [...new Set(positions.map((position) => position.productId.toString()))];
+  const locationIds = [...new Set(positions.map((position) => position.locationId.toString()))];
+  const [memberships, products, locations] = await Promise.all([
+    BusinessMembership.find({ businessId: { $in: businessIds }, status: 'active', permissions: { $in: ['*', 'inventory.read', 'inventory.manage'] } }).select('userId businessId').lean(),
+    Product.find({ _id: { $in: productIds } }).select('name').lean(),
+    BusinessLocation.find({ _id: { $in: locationIds } }).select('name').lean()
+  ]);
+  const productMap = new Map(products.map((product) => [product._id.toString(), product.name]));
+  const locationMap = new Map(locations.map((location) => [location._id.toString(), location.name]));
+  const membersByBusiness = new Map();
+  for (const membership of memberships) {
+    const key = membership.businessId.toString();
+    if (!membersByBusiness.has(key)) membersByBusiness.set(key, []);
+    membersByBusiness.get(key).push(membership.userId.toString());
+  }
+  let notifications = 0;
+  for (const position of positions) {
+    const users = membersByBusiness.get(position.businessId.toString()) || [];
+    for (const userId of users) {
+      const notification = await createNotification({
+        userId,
+        type: 'inventory_low_stock',
+        title: 'Stock is running low',
+        body: `${productMap.get(position.productId.toString()) || 'A product'} has ${position.quantityAvailable} available at ${locationMap.get(position.locationId.toString()) || 'a branch'}.`,
+        data: { businessId: position.businessId.toString(), positionId: position._id.toString(), productId: position.productId.toString(), locationId: position.locationId.toString() },
+        deduplicationKey: lowStockNotificationKey(position._id, userId, dayKey)
+      });
+      if (notification) notifications += 1;
+    }
+  }
+  return { positions: positions.length, notifications };
+}
+
+function lowStockNotificationKey(positionId, userId, dayKey) {
+  return `inventory-low-stock:${positionId.toString()}:${userId.toString()}:${dayKey}`;
+}
+
+module.exports = { targetValues, primaryLocation, ensurePosition, refreshAvailability, adjustInventory, reserveStock, releaseReservation, releaseExpiredReservations, releaseOrderReservations, consumeOrderReservations, transferStock, listPositions, forecast, inventoryForecastCsv, processLowStockAlerts, lowStockNotificationKey, variantKey };

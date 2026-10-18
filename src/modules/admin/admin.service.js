@@ -61,12 +61,22 @@ async function listAdmins({ search, status, page, limit }) {
   return { admins: admins.map(serializeAdmin), total, page, limit, pages: Math.ceil(total / limit) };
 }
 
-async function listUsers({ search, status, accountType, page, limit }) {
+function userAdminFilter({ search, status, accountType, emailVerified, phoneVerified, createdFrom, createdTo } = {}) {
   const filter = { ...(status ? { status } : {}), ...(accountType ? { accountType } : {}) };
   if (search) {
     const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    filter.$or = [{ firstName: new RegExp(escaped, 'i') }, { lastName: new RegExp(escaped, 'i') }, { email: new RegExp(escaped, 'i') }];
+    filter.$or = [{ firstName: new RegExp(escaped, 'i') }, { lastName: new RegExp(escaped, 'i') }, { email: new RegExp(escaped, 'i') }, { phone: new RegExp(escaped, 'i') }];
   }
+  if (emailVerified === 'true') filter.emailVerifiedAt = { $ne: null };
+  if (emailVerified === 'false') filter.emailVerifiedAt = null;
+  if (phoneVerified === 'true') filter.phoneVerifiedAt = { $ne: null };
+  if (phoneVerified === 'false') filter.phoneVerifiedAt = null;
+  if (createdFrom || createdTo) filter.createdAt = { ...(createdFrom ? { $gte: createdFrom } : {}), ...(createdTo ? { $lte: createdTo } : {}) };
+  return filter;
+}
+
+async function listUsers({ search, status, accountType, emailVerified, phoneVerified, createdFrom, createdTo, page, limit }) {
+  const filter = userAdminFilter({ search, status, accountType, emailVerified, phoneVerified, createdFrom, createdTo });
   const skip = (page - 1) * limit;
   const [users, total] = await Promise.all([User.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit), User.countDocuments(filter)]);
   return { users: users.map((user) => user.toSafeJSON({ includeAdmin: true })), total, page, limit, pages: Math.ceil(total / limit) };
@@ -126,4 +136,4 @@ async function changeStatus(actor, adminId, status) {
   return { target, before, after: serializeAdmin(target) };
 }
 
-module.exports = { listAdmins, listUsers, createInvitation, acceptInvitation, updateRoles, changeStatus, serializeAdmin, normalizeRoles, assertAssignable, assertCanManageTarget, assertFinalSuperAdminProtection, countActiveSuperAdmins, roleDefinitions };
+module.exports = { listAdmins, listUsers, userAdminFilter, createInvitation, acceptInvitation, updateRoles, changeStatus, serializeAdmin, normalizeRoles, assertAssignable, assertCanManageTarget, assertFinalSuperAdminProtection, countActiveSuperAdmins, roleDefinitions };

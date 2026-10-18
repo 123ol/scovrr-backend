@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-const MODERATION_SUBJECT_TYPES = ['business', 'product', 'service', 'review', 'portfolio_item'];
+const MODERATION_SUBJECT_TYPES = ['business', 'product', 'service', 'content_post', 'review', 'portfolio_item'];
 const MODERATION_SOURCES = ['report', 'admin', 'automated', 'verification', 'system'];
 const MODERATION_SEVERITIES = ['low', 'medium', 'high', 'critical'];
 const MODERATION_STATUSES = ['pending', 'under_review', 'action_required', 'approved', 'rejected', 'removed', 'dismissed'];
@@ -9,7 +9,9 @@ const decisionSchema = new mongoose.Schema({
   outcome: { type: String, enum: MODERATION_STATUSES, default: null },
   note: { type: String, trim: true, maxlength: 4_000, default: null },
   decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-  decidedAt: { type: Date, default: null }
+  decidedAt: { type: Date, default: null },
+  subjectStatusBefore: { type: String, trim: true, maxlength: 40, default: null },
+  subjectModerationStatusBefore: { type: String, trim: true, maxlength: 40, default: null }
 }, { _id: false });
 
 const moderationCaseSchema = new mongoose.Schema({

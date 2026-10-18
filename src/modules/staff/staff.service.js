@@ -17,6 +17,11 @@ function memberJSON(membership) {
   return { ...membership.toJSONSafe(), user: user ? { id: user._id.toString(), firstName: user.firstName, lastName: user.lastName, email: user.email, status: user.status } : null };
 }
 
+function activityJSON(activity) {
+  const actor = activity.actorId?._id ? activity.actorId : null;
+  return { id: activity._id.toString(), action: activity.action, targetType: activity.targetType, targetId: activity.targetId?.toString() || null, reason: activity.reason || null, metadata: activity.metadata || {}, actor: actor ? { id: actor._id.toString(), firstName: actor.firstName, lastName: actor.lastName, email: actor.email } : null, createdAt: activity.createdAt };
+}
+
 async function recordActivity({ businessId, actorId, action, targetType, targetId, metadata = {}, reason }) {
   return BusinessActivity.create({ businessId, actorId, action, targetType, targetId, metadata, reason });
 }
@@ -50,6 +55,16 @@ async function listInvitations(businessId, { page = 1, limit = 50, status } = {}
     BusinessInvitation.countDocuments(filter)
   ]);
   return { invitations: invitations.map((item) => item.toSafeJSON()), total, page, limit, pages: Math.ceil(total / limit) };
+}
+
+async function listActivity(businessId, { page = 1, limit = 50, action } = {}) {
+  const filter = { businessId, ...(action ? { action } : {}) };
+  const skip = (page - 1) * limit;
+  const [items, total] = await Promise.all([
+    BusinessActivity.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).populate('actorId', 'firstName lastName email'),
+    BusinessActivity.countDocuments(filter)
+  ]);
+  return { activity: items.map(activityJSON), total, page, limit, pages: Math.ceil(total / limit) };
 }
 
 async function addMember(businessId, actorId, input) {
@@ -136,4 +151,4 @@ async function updateMember(businessId, membershipId, actorId, input) {
   return memberJSON(membership);
 }
 
-module.exports = { listMembers, listInvitations, addMember, acceptInvitation, revokeInvitation, updateMember, memberJSON, validateLocationAccess, recordActivity };
+module.exports = { listMembers, listInvitations, listActivity, addMember, acceptInvitation, revokeInvitation, updateMember, memberJSON, activityJSON, validateLocationAccess, recordActivity };

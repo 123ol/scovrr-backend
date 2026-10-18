@@ -7,7 +7,10 @@ const refreshSessionSchema = new mongoose.Schema({
   revokedAt: { type: Date, default: null },
   replacedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'RefreshSession', default: null },
   userAgent: { type: String, maxlength: 512 },
-  ipAddress: { type: String, maxlength: 128 }
+  ipAddress: { type: String, maxlength: 128 },
+  deviceLabel: { type: String, trim: true, maxlength: 120, default: null },
+  platform: { type: String, enum: ['ios', 'android', 'web', 'unknown'], default: 'unknown' },
+  lastUsedAt: { type: Date, default: Date.now }
 }, { timestamps: true, versionKey: false });
 
 refreshSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });

@@ -11,7 +11,8 @@ const time = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'Use HH:mm time for
 const openingInterval = z.object({ start: time, end: time }).refine((value) => value.start < value.end, { path: ['end'], message: 'End time must be after start time' });
 const openingHours = z.array(z.object({ dayOfWeek: z.number().int().min(0).max(6), intervals: z.array(openingInterval).max(10).default([]), closed: z.boolean().default(false) })).max(7).refine((items) => new Set(items.map((item) => item.dayOfWeek)).size === items.length, 'Each weekday may only be configured once');
 const specialHours = z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), intervals: z.array(openingInterval).max(10).default([]), closed: z.boolean().default(false), note: z.string().trim().max(300).optional() })).max(370);
-const delivery = z.object({ enabled: z.boolean().default(false), flatFeeMinor: z.number().int().min(0).default(0), freeDeliveryThresholdMinor: z.number().int().min(0).nullable().default(null), estimatedDeliveryMinutes: z.number().int().min(1).max(10_080).default(120) });
+const deliveryZone = z.object({ state: z.string().trim().min(1).max(120), cities: z.array(z.string().trim().min(1).max(120)).max(100).default([]) });
+const delivery = z.object({ enabled: z.boolean().default(false), flatFeeMinor: z.number().int().min(0).default(0), freeDeliveryThresholdMinor: z.number().int().min(0).nullable().default(null), estimatedDeliveryMinutes: z.number().int().min(1).max(10_080).default(120), zones: z.array(deliveryZone).max(50).default([]) });
 const firstLocation = z.object({
   address: z.object({
     city: z.string().trim().min(1).max(120),
@@ -19,6 +20,30 @@ const firstLocation = z.object({
     country: z.string().trim().min(1).max(120)
   }),
   coordinates: coordinatePair
+});
+const storefrontFaq = z.object({
+  question: z.string().trim().min(1).max(180),
+  answer: z.string().trim().min(1).max(1_000),
+  order: z.number().int().min(0).max(100).default(0)
+});
+const storefrontSchema = z.object({
+  bannerUrl: z.string().trim().url().max(2_000).or(z.literal('')).default(''),
+  bannerTitle: z.string().trim().max(140).default(''),
+  bannerSubtitle: z.string().trim().max(300).default(''),
+  layout: z.enum(['standard', 'catalogue_first', 'services_first']).default('standard'),
+  status: z.enum(['open', 'closed', 'temporarily_closed', 'by_appointment']).default('open'),
+  statusMessage: z.string().trim().max(240).default(''),
+  announcementTitle: z.string().trim().max(140).default(''),
+  announcementBody: z.string().trim().max(500).default(''),
+  announcementExpiresAt: z.coerce.date().nullable().default(null),
+  featuredProductIds: z.array(objectId).max(12).default([]),
+  featuredServiceIds: z.array(objectId).max(12).default([]),
+  faqs: z.array(storefrontFaq).max(20).default([]),
+  policies: z.object({
+    delivery: z.string().trim().max(1_000).default(''),
+    returns: z.string().trim().max(1_000).default(''),
+    cancellations: z.string().trim().max(1_000).default('')
+  }).default({})
 });
 
 const createBusinessSchema = z.object({
@@ -91,14 +116,31 @@ const businessIdSchema = z.object({
   query: z.record(z.never()).default({})
 });
 
+const attachVerificationEvidenceSchema = z.object({
+  body: z.object({ evidenceAssetIds: z.array(objectId).min(1).max(5) }),
+  params: z.object({ businessId: objectId }),
+  query: z.record(z.never()).default({})
+});
+
 const listAdminBusinessesSchema = z.object({
   body: z.record(z.never()).default({}),
   params: z.record(z.never()).default({}),
   query: z.object({
     status: z.enum(['draft', 'pending_review', 'active', 'suspended', 'rejected', 'closed']).optional(),
+    search: z.string().trim().max(120).optional(),
+    operatingModel: z.enum(['physical_store', 'online_only', 'home_based', 'multiple_locations', 'mobile_professional']).optional(),
+    verificationStatus: z.enum(['not_started', 'draft', 'submitted', 'under_review', 'additional_information_required', 'approved', 'rejected', 'expired']).optional(),
+    moderationStatus: z.enum(['pending', 'approved', 'rejected', 'flagged', 'removed']).optional(),
+    capability: z.enum(['marketplace', 'services']).optional(),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(25)
   })
+});
+
+const listBusinessRiskSchema = z.object({
+  body: z.record(z.never()).default({}),
+  params: z.record(z.never()).default({}),
+  query: z.object({ businessId: objectId.optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(25) })
 });
 
 const rejectBusinessSchema = z.object({
@@ -113,4 +155,20 @@ const businessStatusSchema = z.object({
   query: z.record(z.never()).default({})
 });
 
-module.exports = { createBusinessSchema, capabilitiesSchema, createLocationSchema, updateLocationSchema, businessIdSchema, listAdminBusinessesSchema, rejectBusinessSchema, businessStatusSchema };
+const storefrontUpdateSchema = z.object({
+  body: storefrontSchema,
+  params: z.object({ businessId: objectId }),
+  query: z.record(z.never()).default({})
+});
+
+const messagingUpdateSchema = z.object({
+  body: z.object({
+    greetingEnabled: z.boolean().default(false),
+    greetingText: z.string().trim().max(500).default(''),
+    quickReplyTemplates: z.array(z.string().trim().min(1).max(80)).max(6).default([])
+  }).refine((value) => !value.greetingEnabled || value.greetingText.length > 0, 'Add greeting text before enabling the greeting'),
+  params: z.object({ businessId: objectId }),
+  query: z.record(z.never()).default({})
+});
+
+module.exports = { createBusinessSchema, capabilitiesSchema, createLocationSchema, updateLocationSchema, businessIdSchema, attachVerificationEvidenceSchema, listAdminBusinessesSchema, listBusinessRiskSchema, rejectBusinessSchema, businessStatusSchema, storefrontUpdateSchema, messagingUpdateSchema };

@@ -1,11 +1,20 @@
 const { z } = require('zod');
+const { normalizePhone } = require('../../common/phone');
 
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, 'Must be a valid identifier');
 const coordinates = z.tuple([z.number().min(-180).max(180), z.number().min(-90).max(90)]);
+const phone = z.string().trim().min(7).max(32).transform((value, context) => {
+  const normalized = normalizePhone(value);
+  if (!normalized) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Enter a valid phone number, including country code when outside Nigeria' });
+    return z.NEVER;
+  }
+  return normalized;
+});
 const addressBody = z.object({
   label: z.enum(['Home', 'Work', 'Other']),
   recipientName: z.string().trim().min(1).max(120),
-  phone: z.string().trim().min(7).max(32),
+  phone,
   addressLine1: z.string().trim().min(1).max(200),
   addressLine2: z.string().trim().max(200).optional(),
   area: z.string().trim().max(120).optional(),

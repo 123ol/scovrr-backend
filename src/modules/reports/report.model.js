@@ -7,8 +7,8 @@ function idOf(value) {
 
 function safeEvidence(items = []) { return items.map((item) => ({ evidenceId: idOf(item.evidenceId), type: item.type, mimeType: item.mimeType, sizeBytes: item.sizeBytes, alt: item.alt || null, visibility: item.visibility, addedAt: item.addedAt })); }
 
-const REPORT_SUBJECT_TYPES = ['business', 'product', 'service', 'review', 'user', 'message', 'conversation', 'order', 'booking'];
-const REPORT_REASONS = ['counterfeit', 'fraud', 'misleading_content', 'inappropriate_media', 'prohibited_goods', 'spam', 'harassment', 'safety', 'payment_issue', 'privacy', 'fake_review', 'abusive_behaviour', 'privacy_violation', 'other'];
+const REPORT_SUBJECT_TYPES = ['business', 'product', 'service', 'content_post', 'review', 'user', 'message', 'conversation', 'order', 'booking'];
+const REPORT_REASONS = ['counterfeit', 'fraud', 'misleading_content', 'inappropriate_media', 'prohibited_goods', 'spam', 'harassment', 'safety', 'payment_issue', 'privacy', 'fake_review', 'abusive_behaviour', 'privacy_violation', 'support_escalation', 'other'];
 const REPORT_STATUSES = ['open', 'in_review', 'action_required', 'resolved', 'dismissed', 'rejected'];
 const REPORT_PRIORITIES = ['low', 'normal', 'high', 'critical'];
 
@@ -27,6 +27,7 @@ const reportSchema = new mongoose.Schema({
   priority: { type: String, enum: REPORT_PRIORITIES, default: 'normal', index: true },
   assignedAdminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   moderationCaseId: { type: mongoose.Schema.Types.ObjectId, ref: 'ModerationCase', default: null, index: true },
+  escalation: { reason: { type: String, trim: true, maxlength: 2_000, default: null }, escalatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }, escalatedAt: { type: Date, default: null } },
   resolution: { type: String, trim: true, maxlength: 2_000, default: null },
   resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   resolvedAt: { type: Date, default: null }
@@ -59,6 +60,7 @@ reportSchema.methods.toSafeJSON = function toSafeJSON(options = {}) {
     result.assignedAdminId = idOf(this.assignedAdminId);
     result.moderationCaseId = idOf(this.moderationCaseId);
     result.resolvedBy = idOf(this.resolvedBy);
+    result.escalation = this.escalation ? { reason: this.escalation.reason, escalatedBy: idOf(this.escalation.escalatedBy), escalatedAt: this.escalation.escalatedAt } : null;
   }
   return result;
 };

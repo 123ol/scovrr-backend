@@ -3,6 +3,7 @@ const { Cart } = require('./cart.model');
 const { Product } = require('../products/product.model');
 const { CouponCode } = require('../promotions/coupon-code.model');
 const { Promotion } = require('../promotions/promotion.model');
+const notificationService = require('../notifications/notification.service');
 
 async function getOrCreateCart(userId) {
   return Cart.findOneAndUpdate({ userId }, { $setOnInsert: { userId, items: [] } }, { upsert: true, new: true });
@@ -45,6 +46,7 @@ async function addItem(userId, input) {
   const existing = cart.items.find((item) => sameLine(item, input));
   if (existing) existing.quantity = Math.min(99, existing.quantity + input.quantity);
   else cart.items.push(input);
+  cart.abandonedReminderSentAt = null;
   await cart.save();
   return getCartView(userId);
 }
@@ -55,6 +57,7 @@ async function updateItem(userId, input) {
   const existing = cart.items.find((item) => sameLine(item, input));
   if (!existing) throw new AppError(404, 'CART_ITEM_NOT_FOUND', 'Cart item not found');
   existing.quantity = input.quantity;
+  cart.abandonedReminderSentAt = null;
   await cart.save();
   return getCartView(userId);
 }
@@ -62,6 +65,7 @@ async function updateItem(userId, input) {
 async function removeItem(userId, input) {
   const cart = await getOrCreateCart(userId);
   cart.items = cart.items.filter((item) => !sameLine(item, input));
+  cart.abandonedReminderSentAt = null;
   await cart.save();
   return getCartView(userId);
 }
@@ -69,6 +73,7 @@ async function removeItem(userId, input) {
 async function clearCart(userId) {
   const cart = await getOrCreateCart(userId);
   cart.items = [];
+  cart.abandonedReminderSentAt = null;
   await cart.save();
 }
 
@@ -87,4 +92,23 @@ async function applyCoupon(userId, code) {
 
 async function removeCoupon(userId) { const cart = await getOrCreateCart(userId); cart.appliedCouponCode = null; await cart.save(); return getCartView(userId); }
 
-module.exports = { getOrCreateCart, getCartView, addItem, updateItem, removeItem, clearCart, applyCoupon, removeCoupon, validateProductLine, sameLine };
+async function processAbandonedCartReminders(now = new Date()) {
+  const staleBefore = new Date(now.getTime() - 24 * 60 * 60_000);
+  const carts = await Cart.find({ 'items.0': { $exists: true }, updatedAt: { $lte: staleBefore }, abandonedReminderSentAt: null }).select('_id userId items updatedAt').limit(500);
+  let sent = 0;
+  for (const cart of carts) {
+    const notification = await notificationService.createNotification({
+      userId: cart.userId,
+      type: 'cart_reminder',
+      title: 'Your cart is waiting',
+      body: `You have ${cart.items.length} item${cart.items.length === 1 ? '' : 's'} waiting in your SCOVRR cart.`,
+      data: { cartId: cart._id.toString(), itemCount: cart.items.length },
+      deduplicationKey: `cart-reminder:${cart._id}:${cart.updatedAt?.toISOString() || 'unknown'}`
+    });
+    if (notification) sent += 1;
+    await Cart.updateOne({ _id: cart._id, updatedAt: cart.updatedAt, abandonedReminderSentAt: null }, { $set: { abandonedReminderSentAt: new Date(now) } });
+  }
+  return { scanned: carts.length, sent };
+}
+
+module.exports = { getOrCreateCart, getCartView, addItem, updateItem, removeItem, clearCart, applyCoupon, removeCoupon, processAbandonedCartReminders, validateProductLine, sameLine };

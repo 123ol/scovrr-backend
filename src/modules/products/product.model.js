@@ -63,6 +63,7 @@ const productSchema = new mongoose.Schema({
 productSchema.index({ businessId: 1, status: 1, createdAt: -1 });
 productSchema.index({ categoryId: 1, status: 1 });
 productSchema.index({ tags: 1, status: 1 });
+productSchema.index({ status: 1, moderationStatus: 1, createdAt: -1 });
 
 productSchema.methods.toCardJSON = function toCardJSON() {
   const businessId = this.businessId?._id || this.businessId;

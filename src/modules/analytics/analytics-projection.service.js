@@ -2,9 +2,10 @@ const { AnalyticsEvent } = require('./analytics-event.model');
 const { AnalyticsDailyAggregate } = require('./analytics-daily-aggregate.model');
 const { AnalyticsProjectionEvent } = require('./analytics-projection-event.model');
 const { AnalyticsMetricDedupe } = require('./analytics-metric-dedupe.model');
+const { logger } = require('../../common/observability/logger');
 
 const COUNT_FIELDS = {
-  BUSINESS_VIEWED: 'views', PRODUCT_VIEWED: 'views', SERVICE_VIEWED: 'views', DISCOVER_VIEWED: 'views', CATEGORY_VIEWED: 'views',
+  BUSINESS_VIEWED: 'views', PRODUCT_VIEWED: 'views', SERVICE_VIEWED: 'views', CONTENT_POST_VIEWED: 'views', DISCOVER_VIEWED: 'views', CATEGORY_VIEWED: 'views',
   SEARCH_PERFORMED: 'searches', SEARCH_RESULT_CLICKED: 'searchClicks', PRODUCT_SAVED: 'saves', SERVICE_SAVED: 'saves',
   PRODUCT_UNSAVED: 'unsaves', SERVICE_UNSAVED: 'unsaves', PRODUCT_ADDED_TO_CART: 'addsToCart', PRODUCT_REMOVED_FROM_CART: 'removesFromCart',
   CHECKOUT_STARTED: 'checkouts', BOOKING_STARTED: 'bookingStarts', ORDER_CREATED: 'orders', BOOKING_CREATED: 'bookings',
@@ -41,6 +42,10 @@ async function projectEvent(event) {
   const entityId = event.entityId || null;
   const base = aggregateFilter(event, event.businessId ? 'business' : 'platform', entityType, entityId);
   if (countField) await increment(base, { [countField]: 1 });
+  if (event.eventName === 'CONTENT_POST_WATCHED') {
+    const watchSeconds = Math.min(900, Math.max(0, Number(event.metadata?.watchSeconds || 0)));
+    if (watchSeconds > 0) await increment(base, { watchSeconds });
+  }
   if (event.eventName.endsWith('_VIEWED') && (event.businessId || entityId)) {
     const uniqueKey = `${base.dateKey}:${event.businessId || 'platform'}:${entityType || 'surface'}:${entityId || 'surface'}:${actorKey(event)}`;
     try {
@@ -78,7 +83,7 @@ async function processPending(limit = 100, eventFilter = {}) {
       await ensureEventId(event);
       if (await projectOne(event)) processed += 1;
       await AnalyticsEvent.updateOne({ _id: event._id, aggregatedAt: null }, { $set: { aggregatedAt: new Date() } });
-    } catch (error) { console.error('Analytics projection failed:', error.message); }
+    } catch (error) { logger.error('analytics.projection.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
   }
   return processed;
 }

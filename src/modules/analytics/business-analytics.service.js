@@ -6,12 +6,17 @@ const { Payment } = require('../payments/payment.model');
 const { Refund } = require('../payments/refund.model');
 const { LedgerEntry } = require('../payouts/ledger-entry.model');
 const { BusinessLocation } = require('../businesses/business-location.model');
+const { BusinessMembership } = require('../businesses/business-membership.model');
 const { Product } = require('../products/product.model');
 const { Service } = require('../services/service.model');
 const { Promotion } = require('../promotions/promotion.model');
 const { PromotionRedemption } = require('../promotions/promotion-redemption.model');
 const { PromotionCampaign } = require('../advertising/promotion-campaign.model');
 const { PromotionDailyAggregate } = require('../advertising/promotion-daily-aggregate.model');
+const { Conversation } = require('../conversations/conversation.model');
+const { Message } = require('../conversations/message.model');
+const { User } = require('../users/user.model');
+const { BusinessCustomerProfile } = require('../businesses/business-customer-profile.model');
 const { AnalyticsDailyAggregate } = require('./analytics-daily-aggregate.model');
 const { parseRange, dateMatch, dateKey } = require('./analytics-range');
 const entitlementService = require('../subscriptions/entitlement.service');
@@ -71,7 +76,7 @@ async function aggregateMoney(businessId, range, membership, locationId) {
 
 async function aggregateDaily(businessId, range, membership, entityType = null, locationId = null) {
   const filter = { scope: 'business', businessId: oid(businessId), dateKey: { $gte: dateKey(range.from), $lte: dateKey(new Date(range.to.getTime() - 1)) }, ...(entityType ? { entityType } : {}), ...locationClause(membership, locationId, 'locationId') };
-  return AnalyticsDailyAggregate.aggregate([{ $match: filter }, { $group: { _id: '$dateKey', views: { $sum: '$views' }, uniqueViews: { $sum: '$uniqueViews' }, searches: { $sum: '$searches' }, searchClicks: { $sum: '$searchClicks' }, saves: { $sum: '$saves' }, addsToCart: { $sum: '$addsToCart' }, checkouts: { $sum: '$checkouts' }, orders: { $sum: '$orders' }, bookings: { $sum: '$bookings' }, completedOrders: { $sum: '$completedOrders' }, completedBookings: { $sum: '$completedBookings' }, promotionImpressions: { $sum: '$promotionImpressions' }, promotionClicks: { $sum: '$promotionClicks' }, promotionConversions: { $sum: '$promotionConversions' } } }, { $sort: { _id: 1 } }]);
+  return AnalyticsDailyAggregate.aggregate([{ $match: filter }, { $group: { _id: '$dateKey', views: { $sum: '$views' }, uniqueViews: { $sum: '$uniqueViews' }, watchSeconds: { $sum: '$watchSeconds' }, searches: { $sum: '$searches' }, searchClicks: { $sum: '$searchClicks' }, saves: { $sum: '$saves' }, addsToCart: { $sum: '$addsToCart' }, checkouts: { $sum: '$checkouts' }, orders: { $sum: '$orders' }, bookings: { $sum: '$bookings' }, completedOrders: { $sum: '$completedOrders' }, completedBookings: { $sum: '$completedBookings' }, promotionImpressions: { $sum: '$promotionImpressions' }, promotionClicks: { $sum: '$promotionClicks' }, promotionConversions: { $sum: '$promotionConversions' } } }, { $sort: { _id: 1 } }]);
 }
 
 async function topEntities(businessId, range, membership, entityType, Model, locationId) {
@@ -130,4 +135,170 @@ async function getCustomers(businessId, membership, query) {
   return { range: result.range, total: customerIds.size, newCustomers: customerIds.size - returningCustomers, returningCustomers, source: 'paid_or_completed_orders_and_bookings' };
 }
 
-module.exports = { getOverview, getSales, getProducts, getServices, getLocations, getCustomers, aggregateMoney, aggregateDaily, parseRange };
+async function getResponseTime(businessId, _membership, query = {}) {
+  const range = parseRange(query);
+  const sellerIds = await BusinessMembership.distinct('userId', { businessId: oid(businessId), status: 'active' });
+  const empty = { range: { from: range.from, to: range.to }, conversations: 0, answered: 0, unanswered: 0, averageMinutes: null, medianMinutes: null };
+  if (!sellerIds.length) return empty;
+  const conversations = await Conversation.find({ 'contextSnapshot.businessId': String(businessId), createdAt: { $gte: range.from, $lt: range.to }, participantIds: { $in: sellerIds } }).select('_id').limit(1_000).lean();
+  if (!conversations.length) return empty;
+  const messages = await Message.find({ conversationId: { $in: conversations.map((item) => item._id) } }).sort({ createdAt: 1 }).select('conversationId senderId createdAt').lean();
+  const byConversation = new Map();
+  for (const message of messages) {
+    const key = message.conversationId.toString();
+    const state = byConversation.get(key) || { firstBuyerAt: null, responseMinutes: null };
+    const isSeller = sellerIds.some((id) => id.toString() === message.senderId.toString());
+    if (!isSeller && !state.firstBuyerAt) state.firstBuyerAt = message.createdAt;
+    else if (isSeller && state.firstBuyerAt && state.responseMinutes === null) state.responseMinutes = Math.max(0, (message.createdAt - state.firstBuyerAt) / 60_000);
+    byConversation.set(key, state);
+  }
+  const responseTimes = [...byConversation.values()].map((item) => item.responseMinutes).filter((value) => value !== null).sort((a, b) => a - b);
+  const median = responseTimes.length ? responseTimes[Math.floor((responseTimes.length - 1) / 2)] : null;
+  return { range: { from: range.from, to: range.to }, conversations: conversations.length, answered: responseTimes.length, unanswered: conversations.length - responseTimes.length, averageMinutes: responseTimes.length ? Number((responseTimes.reduce((sum, value) => sum + value, 0) / responseTimes.length).toFixed(2)) : null, medianMinutes: median === null ? null : Number(median.toFixed(2)) };
+}
+
+async function getCustomerSegments(businessId, membership, query = {}) {
+  const base = await getCustomers(businessId, membership, query);
+  const range = parseRange(query);
+  const paid = { $in: ['successful', 'refunded', 'partially_refunded'] };
+  const [orders, bookings] = await Promise.all([
+    Order.aggregate([{ $match: { businessIds: oid(businessId), paymentStatus: paid, ...inRange(range), ...locationClause(membership, query.locationId, 'fulfillmentLocationId') } }, { $group: { _id: '$customerId', purchases: { $sum: 1 }, spendMinor: { $sum: '$totalMinor' } } }]),
+    Booking.aggregate([{ $match: { businessId: oid(businessId), paymentStatus: paid, ...inRange(range), ...locationClause(membership, query.locationId, 'locationId') } }, { $group: { _id: '$customerId', purchases: { $sum: 1 }, spendMinor: { $sum: '$priceMinor' } } }])
+  ]);
+  return summarizeCustomerSegments({ orders, bookings, base });
+}
+
+function summarizeCustomerSegments({ orders = [], bookings = [], base }) {
+  const customers = new Map();
+  for (const row of [...orders, ...bookings]) {
+    const key = row._id.toString();
+    const current = customers.get(key) || { purchases: 0, spendMinor: 0 };
+    current.purchases += row.purchases;
+    current.spendMinor += row.spendMinor;
+    customers.set(key, current);
+  }
+  const values = [...customers.values()].sort((a, b) => b.spendMinor - a.spendMinor);
+  const highValueCutoff = values.length ? values[Math.max(0, Math.ceil(values.length * 0.25) - 1)].spendMinor : 0;
+  const repeat = values.filter((item) => item.purchases > 1).length;
+  const highValue = highValueCutoff > 0 ? values.filter((item) => item.spendMinor >= highValueCutoff).length : 0;
+  return { range: base.range, total: base.total, segments: { newCustomers: base.newCustomers, returningCustomers: base.returningCustomers, repeatInRange: repeat, highValueTopQuartile: highValue }, methodology: 'Paid orders and bookings in the selected range; high-value is the observed top quartile by spend.' };
+}
+
+async function getCustomerDirectory(businessId, membership, query = {}) {
+  const base = await getCustomers(businessId, membership, query);
+  const range = parseRange(query);
+  const paid = { $in: ['successful', 'refunded', 'partially_refunded'] };
+  const [orders, bookings] = await Promise.all([
+    Order.aggregate([{ $match: { businessIds: oid(businessId), paymentStatus: paid, ...inRange(range), ...locationClause(membership, query.locationId, 'fulfillmentLocationId') } }, { $group: { _id: { customerId: '$customerId', currency: '$currency' }, orders: { $sum: 1 }, spendMinor: { $sum: '$totalMinor' }, lastActivity: { $max: '$createdAt' } } }, { $sort: { lastActivity: -1 } }, { $limit: 500 }]),
+    Booking.aggregate([{ $match: { businessId: oid(businessId), paymentStatus: paid, ...inRange(range), ...locationClause(membership, query.locationId, 'locationId') } }, { $group: { _id: { customerId: '$customerId', currency: '$currency' }, bookings: { $sum: 1 }, spendMinor: { $sum: '$priceMinor' }, lastActivity: { $max: '$createdAt' } } }, { $sort: { lastActivity: -1 } }, { $limit: 500 }])
+  ]);
+  const customers = new Map();
+  for (const row of orders) {
+    const customerId = row._id.customerId.toString();
+    const customer = customers.get(customerId) || { id: customerId, orders: 0, bookings: 0, lastActivity: null, spendByCurrency: {} };
+    customer.orders += row.orders;
+    customer.lastActivity = !customer.lastActivity || row.lastActivity > customer.lastActivity ? row.lastActivity : customer.lastActivity;
+    customer.spendByCurrency[row._id.currency] = (customer.spendByCurrency[row._id.currency] || 0) + row.spendMinor;
+    customers.set(customerId, customer);
+  }
+  for (const row of bookings) {
+    const customerId = row._id.customerId.toString();
+    const customer = customers.get(customerId) || { id: customerId, orders: 0, bookings: 0, lastActivity: null, spendByCurrency: {} };
+    customer.bookings += row.bookings;
+    customer.lastActivity = !customer.lastActivity || row.lastActivity > customer.lastActivity ? row.lastActivity : customer.lastActivity;
+    customer.spendByCurrency[row._id.currency] = (customer.spendByCurrency[row._id.currency] || 0) + row.spendMinor;
+    customers.set(customerId, customer);
+  }
+  const profiles = await User.find({ _id: { $in: [...customers.keys()] }, status: { $ne: 'deactivated' } }).select('firstName lastName email phone').limit(200).lean();
+  const profileById = new Map(profiles.map((profile) => [profile._id.toString(), profile]));
+  const directory = [...customers.values()].map((customer) => {
+    const profile = profileById.get(customer.id);
+    return { ...customer, firstName: profile?.firstName || null, lastName: profile?.lastName || null, email: profile?.email || null, phone: profile?.phone || null };
+  }).sort((a, b) => new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0)).slice(0, 500);
+  return { range: base.range, total: base.total, returned: directory.length, customers: directory, methodology: 'Paid orders and bookings in the selected range; spend remains separated by currency.' };
+}
+
+function csvCell(value) {
+  const text = value === null || value === undefined ? '' : String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function customerDirectoryCsv(customers = []) {
+  const headers = ['customer_id', 'first_name', 'last_name', 'email', 'phone', 'orders', 'bookings', 'last_activity', 'spend_by_currency'];
+  const rows = customers.map((customer) => [
+    customer.id,
+    customer.firstName,
+    customer.lastName,
+    customer.email,
+    customer.phone,
+    customer.orders,
+    customer.bookings,
+    customer.lastActivity ? new Date(customer.lastActivity).toISOString() : '',
+    JSON.stringify(customer.spendByCurrency || {})
+  ].map(csvCell).join(','));
+  return [headers.join(','), ...rows].join('\n') + '\n';
+}
+
+async function assertCustomerRelationship(businessId, membership, customerId, locationId = null) {
+  const business = oid(businessId);
+  const paid = { $in: ['successful', 'refunded', 'partially_refunded'] };
+  const [order, booking] = await Promise.all([
+    Order.exists({ businessIds: business, customerId: oid(customerId), paymentStatus: paid, ...locationClause(membership, locationId, 'fulfillmentLocationId') }),
+    Booking.exists({ businessId: business, customerId: oid(customerId), paymentStatus: paid, ...locationClause(membership, locationId, 'locationId') })
+  ]);
+  if (!order && !booking) throw new AppError(404, 'CUSTOMER_RELATIONSHIP_NOT_FOUND', 'This customer has no paid order or booking with the business');
+}
+
+async function getCustomerProfile(businessId, membership, customerId, query = {}) {
+  await assertCustomerRelationship(businessId, membership, customerId, query.locationId);
+  const profile = await BusinessCustomerProfile.findOne({ businessId: oid(businessId), customerId: oid(customerId) });
+  return { profile: profile?.toSafeJSON() || { businessId: String(businessId), customerId: String(customerId), tags: [], note: '', nextFollowUpAt: null } };
+}
+
+async function updateCustomerProfile(businessId, membership, customerId, actorId, input, query = {}) {
+  await assertCustomerRelationship(businessId, membership, customerId, query.locationId);
+  const update = { businessId: oid(businessId), customerId: oid(customerId), updatedBy: actorId };
+  if (input.tags !== undefined) update.tags = [...new Set(input.tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean))].slice(0, 10);
+  if (input.note !== undefined) update.note = input.note || '';
+  if (input.nextFollowUpAt !== undefined) update.nextFollowUpAt = input.nextFollowUpAt ? new Date(input.nextFollowUpAt) : null;
+  const profile = await BusinessCustomerProfile.findOneAndUpdate({ businessId: oid(businessId), customerId: oid(customerId) }, { $set: update, $setOnInsert: { createdBy: actorId } }, { upsert: true, new: true, setDefaultsOnInsert: true });
+  return { profile: profile.toSafeJSON() };
+}
+
+function summarizeStaffProductivity({ members = [], rows = [] } = {}) {
+  const rowByStaff = new Map();
+  for (const row of rows) {
+    const staffId = row._id.staffUserId.toString();
+    const staff = rowByStaff.get(staffId) || { staffUserId: staffId, bookings: 0, completedBookings: 0, scheduledMinutes: 0, lastBookingAt: null, revenueByCurrency: {} };
+    staff.bookings += row.bookings;
+    staff.completedBookings += row.completedBookings;
+    staff.scheduledMinutes += Math.round(row.scheduledMinutes || 0);
+    staff.lastBookingAt = !staff.lastBookingAt || row.lastBookingAt > staff.lastBookingAt ? row.lastBookingAt : staff.lastBookingAt;
+    staff.revenueByCurrency[row._id.currency] = (staff.revenueByCurrency[row._id.currency] || 0) + row.paidRevenueMinor;
+    rowByStaff.set(staffId, staff);
+  }
+  return members.map((member) => {
+    const user = member.userId;
+    const metrics = rowByStaff.get(user?._id?.toString()) || { staffUserId: user?._id?.toString() || null, bookings: 0, completedBookings: 0, scheduledMinutes: 0, lastBookingAt: null, revenueByCurrency: {} };
+    return { ...metrics, role: member.role, completionRate: metrics.bookings ? Number((metrics.completedBookings / metrics.bookings).toFixed(4)) : 0, user: user ? { id: user._id.toString(), firstName: user.firstName, lastName: user.lastName, email: user.email } : null };
+  });
+}
+
+async function getStaffProductivity(businessId, membership, query = {}) {
+  const range = parseRange(query);
+  const [members, rows] = await Promise.all([
+    BusinessMembership.find({ businessId: oid(businessId), status: 'active' }).populate('userId', 'firstName lastName email').select('userId role').lean(),
+    Booking.aggregate([
+      { $match: { businessId: oid(businessId), staffUserId: { $ne: null }, paymentStatus: { $in: ['successful', 'refunded', 'partially_refunded'] }, ...inRange(range), ...locationClause(membership, query.locationId, 'locationId') } },
+      { $group: { _id: { staffUserId: '$staffUserId', currency: '$currency' }, bookings: { $sum: 1 }, completedBookings: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } }, paidRevenueMinor: { $sum: '$priceMinor' }, scheduledMinutes: { $sum: { $divide: [{ $subtract: ['$endAt', '$startAt'] }, 60000] } }, lastBookingAt: { $max: '$startAt' } } },
+      { $sort: { lastBookingAt: -1 } },
+      { $limit: 1_000 }
+    ])
+  ]);
+  return {
+    range: { from: range.from, to: range.to, label: range.label },
+    staff: summarizeStaffProductivity({ members, rows })
+  };
+}
+
+module.exports = { getOverview, getSales, getProducts, getServices, getLocations, getCustomers, getResponseTime, getCustomerSegments, summarizeCustomerSegments, getCustomerDirectory, customerDirectoryCsv, getCustomerProfile, updateCustomerProfile, getStaffProductivity, summarizeStaffProductivity, aggregateMoney, aggregateDaily, parseRange };

@@ -11,20 +11,53 @@ const { Message } = require('../conversations/message.model');
 const { Conversation } = require('../conversations/conversation.model');
 const { Order } = require('../orders/order.model');
 const { Booking } = require('../bookings/booking.model');
+const { ContentPost } = require('../content-posts/content-post.model');
 const moderationService = require('../moderation/moderation.service');
 const { OperationalNote } = require('../operations/operational-note.model');
+const { AuditLog } = require('../audit/audit-log.model');
+const businessRiskService = require('../businesses/business-risk.service');
 const { assertUserCanActById } = require('../users/user-status.service');
 
-const SUBJECT_MODELS = { business: Business, product: Product, service: Service, review: Review, user: User, message: Message, conversation: Conversation, order: Order, booking: Booking };
-const MODERATION_SUBJECTS = new Set(['business', 'product', 'service', 'review']);
+const SUBJECT_MODELS = { business: Business, product: Product, service: Service, content_post: ContentPost, review: Review, user: User, message: Message, conversation: Conversation, order: Order, booking: Booking };
+const MODERATION_SUBJECTS = new Set(['business', 'product', 'service', 'content_post', 'review']);
 const ACTIVE_STATUSES = ['open', 'in_review', 'action_required'];
 
 function reportNumber() { return `SCV-RPT-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`; }
 function idOf(value) { return value?._id?.toString() || value?.toString() || null; }
 function defaultPriority(reason) {
-  if (['counterfeit', 'fraud', 'safety', 'prohibited_goods'].includes(reason)) return 'high';
+  if (['counterfeit', 'fraud', 'safety', 'prohibited_goods', 'support_escalation'].includes(reason)) return 'high';
   if (['harassment', 'inappropriate_media'].includes(reason)) return 'normal';
   return 'low';
+}
+function priorityRank(priority) { return { low: 1, normal: 2, high: 3, critical: 4 }[priority] || 0; }
+
+function investigationReportJSON(report) {
+  const safe = report.toSafeJSON({ audience: 'admin' });
+  return {
+    id: safe.id,
+    reportNumber: safe.reportNumber,
+    subjectType: safe.subjectType,
+    subjectId: safe.subjectId,
+    businessId: safe.businessId,
+    reason: safe.reason,
+    status: safe.status,
+    priority: safe.priority,
+    resolution: safe.resolution,
+    createdAt: safe.createdAt,
+    updatedAt: safe.updatedAt
+  };
+}
+
+function summarizeInvestigationReports(reports = []) {
+  const statuses = {}; const reasons = {}; let highPriority = 0;
+  const reporters = new Set();
+  reports.forEach((report) => {
+    statuses[report.status] = (statuses[report.status] || 0) + 1;
+    reasons[report.reason] = (reasons[report.reason] || 0) + 1;
+    if (['high', 'critical'].includes(report.priority)) highPriority += 1;
+    if (report.reporterId) reporters.add(idOf(report.reporterId));
+  });
+  return { total: reports.length, active: reports.filter((report) => ACTIVE_STATUSES.includes(report.status)).length, highPriority, uniqueReporters: reporters.size, statuses, reasons };
 }
 
 async function resolveSubject(userId, input) {
@@ -35,8 +68,9 @@ async function resolveSubject(userId, input) {
   const subject = await Model.findById(input.subjectId);
   if (!subject) throw new AppError(404, 'REPORT_SUBJECT_NOT_FOUND', 'The item being reported could not be found');
   if (input.subjectType === 'review' && subject.status !== 'approved') throw new AppError(404, 'REPORT_SUBJECT_NOT_VISIBLE', 'This review is not currently reportable');
+  if (input.subjectType === 'content_post' && (subject.status !== 'active' || subject.moderationStatus !== 'approved')) throw new AppError(404, 'REPORT_SUBJECT_NOT_VISIBLE', 'This post is not currently reportable');
   let businessId = null;
-  if (['product', 'service', 'review'].includes(input.subjectType)) businessId = subject.businessId;
+  if (['product', 'service', 'content_post', 'review'].includes(input.subjectType)) businessId = subject.businessId;
   if (input.subjectType === 'business') businessId = subject._id;
   if (input.subjectType === 'message') {
     const conversation = await Conversation.findOne({ _id: subject.conversationId, participantIds: userId });
@@ -51,6 +85,7 @@ async function resolveSubject(userId, input) {
 
 async function createReport(userId, input) {
   await assertUserCanActById(userId);
+  if (input.reason === 'support_escalation' && input.subjectType !== 'conversation') throw new AppError(400, 'INVALID_SUPPORT_ESCALATION', 'Support escalation must reference a conversation');
   const { subject, businessId } = await resolveSubject(userId, input);
   const activeExisting = await Report.exists({ reporterId: userId, subjectType: input.subjectType, subjectId: input.subjectId, status: { $in: ACTIVE_STATUSES } });
   if (activeExisting) throw new AppError(409, 'REPORT_ALREADY_OPEN', 'You already have an open report for this item');
@@ -88,10 +123,12 @@ async function listAdminReports(query) {
     ...((query.from || query.to) ? { createdAt: { ...(query.from ? { $gte: new Date(query.from) } : {}), ...(query.to ? { $lt: new Date(query.to) } : {}) } } : {})
   };
   const skip = (query.page - 1) * query.limit;
-  const [reports, total] = await Promise.all([
-    Report.find(filter).sort({ priority: -1, createdAt: -1 }).skip(skip).limit(query.limit).populate('reporterId', 'firstName lastName email').populate('assignedAdminId', 'firstName lastName email'),
+  const [reportRows, total] = await Promise.all([
+    Report.aggregate([{ $match: filter }, { $addFields: { _priorityRank: { $indexOfArray: [['low', 'normal', 'high', 'critical'], '$priority'] } } }, { $sort: { _priorityRank: -1, createdAt: -1 } }, { $skip: skip }, { $limit: query.limit }]),
     Report.countDocuments(filter)
   ]);
+  const reports = reportRows.map((row) => Report.hydrate(row));
+  await Report.populate(reports, [{ path: 'reporterId', select: 'firstName lastName email' }, { path: 'assignedAdminId', select: 'firstName lastName email' }]);
   return { reports: reports.map((report) => ({ ...report.toSafeJSON({ audience: 'admin' }), reporter: report.reporterId?.email ? { id: report.reporterId._id.toString(), firstName: report.reporterId.firstName, lastName: report.reporterId.lastName, email: report.reporterId.email } : null, assignedAdmin: report.assignedAdminId?.email ? { id: report.assignedAdminId._id.toString(), firstName: report.assignedAdminId.firstName, lastName: report.assignedAdminId.lastName, email: report.assignedAdminId.email } : null })), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
 }
 
@@ -100,6 +137,39 @@ async function getAdminReport(reportId) {
   if (!report) throw new AppError(404, 'REPORT_NOT_FOUND', 'Report not found');
   const notes = await OperationalNote.find({ subjectType: 'report', subjectId: report._id }).sort({ createdAt: -1 }).limit(100).populate('authorAdminId', 'firstName lastName email');
   return { report, notes };
+}
+
+async function getAdminInvestigation(reportId) {
+  const report = await Report.findById(reportId);
+  if (!report) throw new AppError(404, 'REPORT_NOT_FOUND', 'Report not found');
+  const scope = [{ subjectType: report.subjectType, subjectId: report.subjectId }];
+  if (report.businessId) scope.push({ businessId: report.businessId });
+  if (report.reporterId) scope.push({ reporterId: report.reporterId });
+  const relatedReports = await Report.find({ _id: { $ne: report._id }, $or: scope }).sort({ createdAt: -1 }).limit(100);
+  const allReports = [report, ...relatedReports];
+  const [risk, moderation, audits] = await Promise.all([
+    report.businessId ? businessRiskService.listRiskSignals({ businessId: report.businessId.toString(), page: 1, limit: 1 }) : Promise.resolve({ businesses: [] }),
+    report.moderationCaseId ? moderationService.getAdminCase(report.moderationCaseId) : Promise.resolve(null),
+    AuditLog.find({ $or: [{ targetType: 'report', targetId: report._id }, ...(report.moderationCaseId ? [{ targetType: 'moderation_case', targetId: report.moderationCaseId }] : [])] }).sort({ createdAt: -1 }).limit(100).populate('actorId', 'firstName lastName email')
+  ]);
+  const related = relatedReports.map((item) => ({ ...investigationReportJSON(item), scopes: [
+    item.subjectType === report.subjectType && item.subjectId.toString() === report.subjectId.toString() ? 'same_subject' : null,
+    report.businessId && item.businessId?.toString() === report.businessId.toString() ? 'same_business' : null,
+    item.reporterId?.toString() === report.reporterId?.toString() ? 'same_reporter' : null
+  ].filter(Boolean) }));
+  return {
+    report: investigationReportJSON(report),
+    summary: summarizeInvestigationReports(allReports),
+    relatedReports: related,
+    sellerRisk: risk.businesses[0] || null,
+    moderationCase: moderation ? {
+      moderationCase: moderation.case.toSafeJSON(),
+      subject: moderation.subject,
+      reports: moderation.reports.map((item) => investigationReportJSON(item)),
+      notes: moderation.notes.map((item) => item.toSafeJSON())
+    } : null,
+    audit: audits.map((item) => ({ ...item.toSafeJSON(), actor: item.actorId?.email ? { id: item.actorId._id.toString(), firstName: item.actorId.firstName, lastName: item.actorId.lastName, email: item.actorId.email } : null }))
+  };
 }
 
 async function addEvidence(userId, reportId, evidenceAssetIds) {
@@ -141,6 +211,17 @@ async function startReview(reportId, adminId, note = '') {
   const before = report.toSafeJSON({ audience: 'admin' }); report.status = 'in_review'; report.assignedAdminId = report.assignedAdminId || adminId; report.resolution = note || report.resolution; await report.save(); return { report, before };
 }
 
+async function escalateReport(reportId, adminId, reason) {
+  const report = await Report.findOne({ _id: reportId, status: { $in: ACTIVE_STATUSES } });
+  if (!report) throw new AppError(409, 'REPORT_NOT_ESCALATABLE', 'This report is no longer active');
+  const before = report.toSafeJSON({ audience: 'admin' });
+  report.status = 'action_required';
+  report.priority = 'critical';
+  report.escalation = { reason, escalatedBy: adminId, escalatedAt: new Date() };
+  await report.save();
+  return { report, before };
+}
+
 async function resolveReport(reportId, adminId, input) {
   const report = await Report.findById(reportId);
   if (!report) throw new AppError(404, 'REPORT_NOT_FOUND', 'Report not found');
@@ -155,4 +236,4 @@ async function resolveReport(reportId, adminId, input) {
   await report.save(); return { report, before };
 }
 
-module.exports = { reportNumber, createReport, resolveSubject, getReporterReport, listReporterReports, listAdminReports, getAdminReport, addEvidence, addNote, assignReport, setPriority, startReview, resolveReport, defaultPriority };
+module.exports = { reportNumber, createReport, resolveSubject, getReporterReport, listReporterReports, listAdminReports, getAdminReport, getAdminInvestigation, addEvidence, addNote, assignReport, setPriority, startReview, escalateReport, resolveReport, defaultPriority, priorityRank, investigationReportJSON, summarizeInvestigationReports };

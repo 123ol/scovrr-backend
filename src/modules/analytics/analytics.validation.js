@@ -7,7 +7,7 @@ const scalar = z.union([z.string().max(300), z.number().finite(), z.boolean(), z
 const metadata = z.record(scalar).default({}).refine((value) => JSON.stringify(value).length <= 2_500, 'Event metadata is too large');
 const eventBody = z.object({
   eventName, clientEventId: z.string().trim().min(8).max(120).optional(), anonymousSessionId: z.string().trim().min(8).max(120).optional(), sessionId: z.string().trim().min(8).max(120).optional(),
-  entityType: z.enum(['business', 'product', 'service', 'category', 'order', 'booking', 'conversation']).optional(), entityId: objectId.optional(),
+  entityType: z.enum(['business', 'product', 'service', 'content_post', 'category', 'order', 'booking', 'conversation']).optional(), entityId: objectId.optional(),
   source: z.enum(EVENT_SOURCES).optional(), placement: z.string().trim().max(80).optional(), platform: z.enum(EVENT_PLATFORMS).optional(), appVersion: z.string().trim().max(40).optional(),
   attribution: z.object({ source: z.string().max(80).optional(), campaign: z.string().max(120).optional(), medium: z.string().max(80).optional() }).strict().optional(),
   metadata, properties: metadata, occurredAt: z.string().datetime({ offset: true }).optional()

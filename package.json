@@ -18,6 +18,8 @@
     "migrate:analytics-indexes": "node scripts/migrate-analytics-indexes.js",
     "migrate:launch-indexes": "node scripts/migrate-launch-indexes.js",
     "backfill:analytics": "node scripts/backfill-analytics.js",
+    "test:concurrency": "NODE_ENV=test node --test test/phase1-concurrency.test.js",
+    "test:load": "NODE_ENV=test node --test test/phase1-load.test.js",
     "test": "NODE_ENV=test node --test",
     "lint": "eslint src scripts test"
   },

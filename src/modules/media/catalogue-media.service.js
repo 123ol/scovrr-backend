@@ -1,14 +1,17 @@
 const mongoose = require('mongoose');
 const { AppError } = require('../../common/errors/AppError');
 const { CatalogueMediaAsset } = require('./catalogue-media-asset.model');
+const { cloudinaryVideoPosterUrl } = require('./media-url');
 
 function publicMedia(asset) {
+  const posterUrl = String(asset.mimeType || '').startsWith('video/') ? cloudinaryVideoPosterUrl(asset.url) : null;
   return {
     url: asset.url,
     provider: asset.provider,
     mimeType: asset.mimeType,
     alt: asset.alt,
     order: asset.order || 0,
+    ...(posterUrl ? { posterUrl } : {}),
     ...(asset.isCover !== undefined ? { isCover: Boolean(asset.isCover) } : {})
   };
 }

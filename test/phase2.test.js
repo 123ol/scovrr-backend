@@ -3,6 +3,11 @@ const test = require('node:test');
 const { slugify } = require('../src/common/slug');
 const { permissionsForRole } = require('../src/modules/businesses/business-membership.model');
 const { createBusinessSchema, createLocationSchema } = require('../src/modules/businesses/business.validation');
+const { attachVerificationEvidenceSchema } = require('../src/modules/businesses/business.validation');
+const { sessionSchema } = require('../src/modules/evidence/evidence.validation');
+const { EvidenceAsset } = require('../src/modules/evidence/evidence-asset.model');
+const { EvidenceUploadSession } = require('../src/modules/evidence/upload-session.model');
+const { Business } = require('../src/modules/businesses/business.model');
 const { validateCategory: validateProductCategory } = require('../src/modules/products/product.service');
 
 test('business slugs are readable and normalized', () => {
@@ -79,4 +84,17 @@ test('product capability is required even when no category is supplied', async (
     () => validateProductCategory(undefined, { capabilities: ['services'] }),
     (error) => error.code === 'MARKETPLACE_CAPABILITY_REQUIRED'
   );
+});
+
+test('verification evidence uses the existing private upload and business ownership boundaries', () => {
+  assert.equal(EvidenceAsset.schema.path('purpose').enumValues.includes('verification'), true);
+  assert.equal(EvidenceAsset.schema.path('subjectType').enumValues.includes('verification'), true);
+  assert.equal(EvidenceUploadSession.schema.path('purpose').enumValues.includes('verification'), true);
+  assert.equal(Business.schema.path('verification.evidenceAssetIds').instance, 'Array');
+  assert.equal(Business.schema.path('verification.status').enumValues.includes('additional_information_required'), true);
+
+  const businessId = '507f1f77bcf86cd799439011';
+  assert.equal(sessionSchema.safeParse({ body: { purpose: 'verification', mimeType: 'image/jpeg', subjectType: 'business', subjectId: businessId }, params: {}, query: {} }).success, true);
+  assert.equal(sessionSchema.safeParse({ body: { purpose: 'verification', mimeType: 'image/jpeg', subjectType: 'conversation', subjectId: businessId }, params: {}, query: {} }).success, false);
+  assert.equal(attachVerificationEvidenceSchema.safeParse({ body: { evidenceAssetIds: [businessId] }, params: { businessId }, query: {} }).success, true);
 });

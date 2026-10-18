@@ -5,12 +5,17 @@ const { Product } = require('../products/product.model');
 const { Service } = require('../services/service.model');
 const { sanitizeCatalogueMedia } = require('../media/catalogue-media.service');
 const { ContentPostLike } = require('./content-post-like.model');
+const { Follow } = require('../follows/follow.model');
+const { Favorite } = require('../favorites/favorite.model');
+const contentPostSaveService = require('./content-post-save.service');
 
 function publicRelations(query) {
   return query
     .populate({ path: 'businessId', select: 'name slug' })
     .populate({ path: 'linkedProductId', match: { status: 'active', moderationStatus: 'approved' }, select: 'name slug basePriceMinor currency media' })
-    .populate({ path: 'linkedServiceId', match: { status: 'active', moderationStatus: 'approved' }, select: 'name slug basePriceMinor currency media' });
+    .populate({ path: 'linkedServiceId', match: { status: 'active', moderationStatus: 'approved' }, select: 'name slug basePriceMinor currency media' })
+    .populate({ path: 'taggedProductIds', match: { status: 'active', moderationStatus: 'approved' }, select: 'name slug basePriceMinor currency media' })
+    .populate({ path: 'taggedServiceIds', match: { status: 'active', moderationStatus: 'approved' }, select: 'name slug basePriceMinor currency media' });
 }
 
 async function viewerLikeIds(posts, viewerId) {
@@ -20,8 +25,8 @@ async function viewerLikeIds(posts, viewerId) {
 }
 
 async function publicPostJSON(posts, viewerId) {
-  const likedIds = await viewerLikeIds(posts, viewerId);
-  return posts.map((post) => post.toPublicJSON({ likedByViewer: likedIds.has(post._id.toString()) }));
+  const [likedIds, savedIds] = await Promise.all([viewerLikeIds(posts, viewerId), contentPostSaveService.viewerSaveIds(posts, viewerId)]);
+  return posts.map((post) => post.toPublicJSON({ likedByViewer: likedIds.has(post._id.toString()), savedByViewer: savedIds.has(post._id.toString()) }));
 }
 
 function normalizeLinks(input) {
@@ -29,6 +34,14 @@ function normalizeLinks(input) {
     linkedProductId: input.linkedProductId || null,
     linkedServiceId: input.linkedServiceId || null
   };
+}
+
+function normalizeHashtags(values = []) {
+  return [...new Set(values.map((value) => String(value).trim().replace(/^#+/, '').toLowerCase()).filter(Boolean).map((value) => `#${value}`))].slice(0, 10);
+}
+
+function normalizeIds(values = []) {
+  return [...new Set(values.map((value) => value.toString()))];
 }
 
 function assertPostHasContent(body, media) {
@@ -50,11 +63,24 @@ async function validateLinks(businessId, input) {
   return links;
 }
 
+async function validateTags(businessId, input) {
+  const taggedProductIds = normalizeIds(input.taggedProductIds || []);
+  const taggedServiceIds = normalizeIds(input.taggedServiceIds || []);
+  const [productCount, serviceCount] = await Promise.all([
+    taggedProductIds.length ? Product.countDocuments({ _id: { $in: taggedProductIds }, businessId }) : 0,
+    taggedServiceIds.length ? Service.countDocuments({ _id: { $in: taggedServiceIds }, businessId }) : 0
+  ]);
+  if (productCount !== taggedProductIds.length) throw new AppError(400, 'TAGGED_PRODUCT_NOT_FOUND', 'Every tagged product must belong to this business');
+  if (serviceCount !== taggedServiceIds.length) throw new AppError(400, 'TAGGED_SERVICE_NOT_FOUND', 'Every tagged service must belong to this business');
+  return { taggedProductIds, taggedServiceIds };
+}
+
 async function createPost(business, input, authorId) {
   const links = await validateLinks(business._id, input);
+  const tags = await validateTags(business._id, input);
   const media = await sanitizeCatalogueMedia({ businessId: business._id, actorId: authorId, media: input.media || [], field: 'Post media', allowVideo: true });
   assertPostHasContent(input.body, media);
-  return ContentPost.create({ businessId: business._id, authorId, type: input.type, title: input.title || '', body: input.body, media, ...links });
+  return ContentPost.create({ businessId: business._id, authorId, type: input.type, title: input.title || '', body: input.body, media, hashtags: normalizeHashtags(input.hashtags), ...tags, ...links });
 }
 
 async function updatePost(businessId, postId, input, actorId) {
@@ -65,12 +91,16 @@ async function updatePost(businessId, postId, input, actorId) {
     linkedServiceId: input.linkedServiceId !== undefined ? input.linkedServiceId : post.linkedServiceId
   };
   const links = await validateLinks(businessId, mergedLinks);
+  const tags = await validateTags(businessId, { taggedProductIds: input.taggedProductIds !== undefined ? input.taggedProductIds : post.taggedProductIds, taggedServiceIds: input.taggedServiceIds !== undefined ? input.taggedServiceIds : post.taggedServiceIds });
   const nextBody = input.body !== undefined ? input.body : post.body;
   const nextMedia = input.media !== undefined
     ? await sanitizeCatalogueMedia({ businessId, actorId, media: input.media, field: 'Post media', allowVideo: true })
     : post.media;
   assertPostHasContent(nextBody, nextMedia);
   for (const field of ['type', 'title', 'body']) if (input[field] !== undefined) post[field] = input[field];
+  if (input.hashtags !== undefined) post.hashtags = normalizeHashtags(input.hashtags);
+  post.taggedProductIds = tags.taggedProductIds;
+  post.taggedServiceIds = tags.taggedServiceIds;
   if (input.media !== undefined) post.media = nextMedia;
   post.linkedProductId = links.linkedProductId;
   post.linkedServiceId = links.linkedServiceId;
@@ -116,19 +146,47 @@ async function listPublicPosts(businessSlug, query, viewerId) {
 async function listDiscoverPosts(query, businessIds = null, viewerId) {
   const filter = { status: 'active', moderationStatus: 'approved' };
   if (businessIds) filter.businessId = { $in: businessIds };
+  if (query.feed === 'following') {
+    const followed = viewerId ? await Follow.find({ userId: viewerId }).select('businessId').lean() : [];
+    filter.businessId = { $in: followed.map((item) => item.businessId) };
+  }
+  if (query.feed === 'personalized' && viewerId) {
+    const [followed, savedBusinesses] = await Promise.all([
+      Follow.find({ userId: viewerId }).select('businessId').lean(),
+      Favorite.find({ userId: viewerId, targetType: 'business' }).select('targetId').lean()
+    ]);
+    const preferredBusinessIds = [...new Set([...followed.map((item) => item.businessId.toString()), ...savedBusinesses.map((item) => item.targetId.toString())])];
+    if (preferredBusinessIds.length) filter.businessId = { $in: preferredBusinessIds };
+  }
   if (query.postType === 'product_update') filter.type = 'product_update';
   if (query.postType === 'service_update') filter.type = 'service_update';
   if (query.postType === 'updates') filter.type = { $in: ['announcement', 'offer', 'tip'] };
+  if (query.postId) filter._id = query.postId;
   if (query.q) {
     const expression = new RegExp(String(query.q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    filter.$or = [{ title: expression }, { body: expression }];
+    filter.$or = [{ title: expression }, { body: expression }, { hashtags: expression }];
   }
   const skip = (query.page - 1) * query.limit;
+  const sort = ['trending', 'personalized'].includes(query.feed) ? { likesCount: -1, commentsCount: -1, publishedAt: -1 } : { publishedAt: -1, createdAt: -1 };
   const [posts, total] = await Promise.all([
-    publicRelations(ContentPost.find(filter)).sort({ publishedAt: -1, createdAt: -1 }).skip(skip).limit(query.limit),
+    publicRelations(ContentPost.find(filter)).sort(sort).skip(skip).limit(query.limit),
     ContentPost.countDocuments(filter)
   ]);
   return { posts: await publicPostJSON(posts, viewerId), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+}
+
+async function listSavedPosts(userId, query) {
+  const skip = (query.page - 1) * query.limit;
+  const [saves, total] = await Promise.all([
+    ContentPostSave.find({ userId }).sort({ createdAt: -1 }).skip(skip).limit(query.limit).select('postId createdAt').lean(),
+    ContentPostSave.countDocuments({ userId })
+  ]);
+  const postIds = saves.map((save) => save.postId);
+  if (!postIds.length) return { posts: [], total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+  const posts = await publicRelations(ContentPost.find({ _id: { $in: postIds }, status: 'active', moderationStatus: 'approved' }));
+  const byId = new Map(posts.map((post) => [post._id.toString(), post]));
+  const orderedPosts = postIds.map((postId) => byId.get(postId.toString())).filter(Boolean);
+  return { posts: await publicPostJSON(orderedPosts, userId), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
 }
 
 async function listAdminPosts(query) {
@@ -156,4 +214,4 @@ async function reviewPost(postId, decision, reason = null) {
   return post;
 }
 
-module.exports = { createPost, updatePost, submitPost, listBusinessPosts, listPublicPosts, listDiscoverPosts, listAdminPosts, reviewPost, assertPostHasContent };
+module.exports = { createPost, updatePost, submitPost, listBusinessPosts, listPublicPosts, listDiscoverPosts, listSavedPosts, listAdminPosts, reviewPost, assertPostHasContent, normalizeHashtags, normalizeIds, validateTags };

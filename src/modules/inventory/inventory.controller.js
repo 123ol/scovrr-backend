@@ -9,6 +9,8 @@ function assertLocations(req, locationIds) {
 }
 
 const positions = asyncHandler(async (req, res) => { assertLocations(req, [req.query.locationId]); return sendSuccess(res, await service.listPositions({ businessId: req.business._id, ...req.query })); });
+const forecast = asyncHandler(async (req, res) => { assertLocations(req, [req.query.locationId]); return sendSuccess(res, await service.forecast({ businessId: req.business._id, ...req.query })); });
+const forecastExport = asyncHandler(async (req, res) => { assertLocations(req, [req.query.locationId]); const report = await service.forecast({ businessId: req.business._id, ...req.query }); res.set('Content-Type', 'text/csv; charset=utf-8'); res.set('Content-Disposition', `attachment; filename="scovrr-inventory-forecast-${new Date().toISOString().slice(0, 10)}.csv"`); return res.send(service.inventoryForecastCsv(report.positions)); });
 const transfer = asyncHandler(async (req, res) => { assertLocations(req, [req.body.sourceLocationId, req.body.destinationLocationId]); const item = await service.transferStock({ ...req.body, businessId: req.business._id, actorId: req.auth.userId }); return res.status(201).json({ success: true, data: { transfer: item.toSafeJSON() } }); });
 
-module.exports = { positions, transfer };
+module.exports = { positions, forecast, forecastExport, transfer };

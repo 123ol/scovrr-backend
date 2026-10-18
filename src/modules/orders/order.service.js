@@ -12,6 +12,7 @@ const { env } = require('../../config/env');
 const promotionService = require('../promotions/promotion.service');
 const { assertUserCanActById } = require('../users/user-status.service');
 const deliveryService = require('../deliveries/delivery.service');
+const { Delivery } = require('../deliveries/delivery.model');
 const { membershipHasPermission } = require('../../middleware/business-access');
 
 function orderNumber() {
@@ -67,7 +68,7 @@ async function buildCheckoutData(userId, input) {
   const subtotalMinor = lines.reduce((sum, line) => sum + line.lineTotalMinor, 0);
   const couponCode = input.couponCode || cart.appliedCouponCode || null;
   const merchandisePricing = await promotionService.calculatePricing({ businessId, customerId: userId, code: couponCode, currency, subtotalMinor, lines, kind: 'order' });
-  const deliveryQuote = await deliveryService.quote({ locationId: location._id, businessId, method: deliveryMethod, subtotalMinor: merchandisePricing.totalBeforeDeliveryMinor, currency });
+  const deliveryQuote = await deliveryService.quote({ locationId: location._id, businessId, method: deliveryMethod, subtotalMinor: merchandisePricing.totalBeforeDeliveryMinor, currency, destinationAddress: address });
   const pricing = await promotionService.calculatePricing({ businessId, customerId: userId, code: couponCode, currency, subtotalMinor, lines, kind: 'order', locationId: location._id, deliveryFeeMinor: deliveryQuote.feeMinor, deliveryMethod });
   return { cart, address, location, deliveryMethod, deliveryQuote, lines, currency, businessIds: [...businessIds], subtotalMinor, discountMinor: pricing.discountMinor, deliveryDiscountMinor: pricing.deliveryDiscountMinor, promotion: pricing.promotion, pricing, deliveryMinor: pricing.deliveryFeeAfterDiscountMinor, totalMinor: pricing.totalMinor, couponCode };
 }
@@ -172,6 +173,22 @@ async function listOrders(userId) {
   return orders.map((order) => order.toSafeJSON());
 }
 
+async function reorder(userId, orderId) {
+  const order = await getOrder(userId, orderId);
+  const added = [];
+  const skipped = [];
+  for (const item of order.items) {
+    try {
+      await cartService.addItem(userId, { productId: item.productId.toString(), variantId: item.variantId?.toString() || null, quantity: Math.min(99, item.quantity) });
+      added.push({ productId: item.productId.toString(), productName: item.productName, quantity: Math.min(99, item.quantity) });
+    } catch (error) {
+      skipped.push({ productId: item.productId.toString(), productName: item.productName, code: error.code || 'PRODUCT_UNAVAILABLE', reason: error.message });
+    }
+  }
+  if (!added.length) throw new AppError(409, 'REORDER_UNAVAILABLE', 'None of the products in this order are currently available', { skipped });
+  return { cart: await cartService.getCartView(userId), added, skipped };
+}
+
 async function getOrder(userId, orderId) {
   const order = await Order.findOne({ _id: orderId, customerId: userId });
   if (!order) throw new AppError(404, 'ORDER_NOT_FOUND', 'Order not found');
@@ -202,7 +219,9 @@ async function listBusinessOrders(businessId, query, membership) {
   } else if (allowedLocations) filter.fulfillmentLocationId = { $in: allowedLocations };
   const skip = (query.page - 1) * query.limit;
   const [orders, total] = await Promise.all([Order.find(filter).sort({ createdAt: -1 }).skip(skip).limit(query.limit), Order.countDocuments(filter)]);
-  return { orders: orders.map((order) => order.toSafeJSON()), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+  const deliveries = await Delivery.find({ businessId, orderId: { $in: orders.map((order) => order._id) } });
+  const deliveryByOrder = new Map(deliveries.map((delivery) => [delivery.orderId.toString(), delivery.toSafeJSON()]));
+  return { orders: orders.map((order) => ({ ...order.toSafeJSON(), delivery: deliveryByOrder.get(order._id.toString()) || order.deliverySnapshot })), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
 }
 
 async function getBusinessOrder(businessId, orderId, membership) {
@@ -231,4 +250,4 @@ async function transitionBusinessOrder({ businessId, orderId, actorId, action, m
   return order;
 }
 
-module.exports = { previewCheckout, createPendingOrder, listOrders, getOrder, cancelPendingOrder, listBusinessOrders, getBusinessOrder, transitionBusinessOrder, buildCheckoutData, addressSnapshot, orderNumber };
+module.exports = { previewCheckout, createPendingOrder, listOrders, getOrder, reorder, cancelPendingOrder, listBusinessOrders, getBusinessOrder, transitionBusinessOrder, buildCheckoutData, addressSnapshot, orderNumber };

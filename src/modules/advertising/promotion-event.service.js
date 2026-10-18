@@ -10,6 +10,7 @@ const { PromotionEvent } = require('./promotion-event.model');
 const { PromotionDailyAggregate } = require('./promotion-daily-aggregate.model');
 const promotionService = require('./promotion.service');
 const analyticsOutbox = require('../analytics/analytics-outbox.service');
+const { logger } = require('../../common/observability/logger');
 
 function key() { return crypto.createHash('sha256').update(env.promotionEventSecret || 'scovrr-dev-promotion-secret').digest(); }
 function hash(value) { return crypto.createHash('sha256').update(String(value)).digest('hex'); }
@@ -93,7 +94,7 @@ async function recordEvent(req, type, input) {
   const increment = type === 'impression' ? { impressions: 1, spendMinor: event.spendMinor } : type === 'click' ? { clicks: 1 } : { conversions: 1 };
   await PromotionDailyAggregate.findOneAndUpdate({ campaignId: campaign._id, dateKey, placement: payload.placement }, { $inc: increment }, { upsert: true, new: true, setDefaultsOnInsert: true });
   event.aggregated = true; await event.save();
-  try { await mirrorToAnalytics(event, campaign); } catch (error) { console.error('Unable to queue sponsored analytics event:', error.message); }
+  try { await mirrorToAnalytics(event, campaign); } catch (error) { logger.error('promotion.analytics_event.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
   return { accepted: true, eventId: event._id.toString() };
 }
 
@@ -112,7 +113,7 @@ async function recordConversion({ userId, targetType, targetIds, conversionId })
   }
   await PromotionDailyAggregate.findOneAndUpdate({ campaignId: click.campaignId, dateKey: new Date().toISOString().slice(0, 10), placement: click.placement }, { $inc: { conversions: 1 } }, { upsert: true, new: true, setDefaultsOnInsert: true });
   await PromotionEvent.updateOne({ _id: conversionEvent._id }, { $set: { aggregated: true } });
-  try { await mirrorToAnalytics(conversionEvent); } catch (error) { console.error('Unable to queue sponsored conversion analytics event:', error.message); }
+    try { await mirrorToAnalytics(conversionEvent); } catch (error) { logger.error('promotion.analytics_conversion.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
   return { accepted: true };
 }
 
@@ -123,7 +124,7 @@ async function aggregatePendingEvents(limit = 500) {
     const dateKey = event.createdAt.toISOString().slice(0, 10);
     const increment = event.type === 'impression' ? { impressions: 1, spendMinor: event.spendMinor } : event.type === 'click' ? { clicks: 1 } : { conversions: 1 };
     await PromotionDailyAggregate.findOneAndUpdate({ campaignId: event.campaignId, dateKey, placement: event.placement }, { $inc: increment }, { upsert: true, new: true, setDefaultsOnInsert: true });
-    try { await mirrorToAnalytics(event); } catch (error) { console.error('Unable to queue sponsored analytics event:', error.message); }
+    try { await mirrorToAnalytics(event); } catch (error) { logger.error('promotion.analytics_event.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
     await PromotionEvent.updateOne({ _id: event._id, aggregated: false }, { $set: { aggregated: true } }); processed += 1;
   }
   return processed;

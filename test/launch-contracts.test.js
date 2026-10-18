@@ -3,6 +3,10 @@ const test = require('node:test');
 const { CatalogueUploadSession } = require('../src/modules/media/catalogue-upload-session.model');
 const { ContentPost } = require('../src/modules/content-posts/content-post.model');
 const { CatalogueMediaAsset } = require('../src/modules/media/catalogue-media-asset.model');
+const { Business } = require('../src/modules/businesses/business.model');
+const { BusinessLocation } = require('../src/modules/businesses/business-location.model');
+const { Product } = require('../src/modules/products/product.model');
+const { Service } = require('../src/modules/services/service.model');
 const { Payment } = require('../src/modules/payments/payment.model');
 const { assertPublishableCatalogueMedia } = require('../src/modules/media/catalogue-media.service');
 const { INDEX_DEFINITIONS, sameOptions } = require('../scripts/migrate-launch-indexes');
@@ -13,6 +17,16 @@ test('catalogue upload sessions expire and content moderation has operational in
   assert.ok(ContentPost.schema.indexes().some(([fields]) => fields.businessId === 1 && fields.status === 1 && fields.createdAt === -1));
   assert.ok(ContentPost.schema.indexes().some(([fields]) => fields.status === 1 && fields.moderationStatus === 1 && fields.createdAt === -1));
   assert.ok(CatalogueMediaAsset.schema.indexes().some(([fields, options]) => fields.businessId === 1 && fields.publicId === 1 && options.unique === true));
+});
+
+test('public discovery collections have approved-state recency indexes', () => {
+  for (const schema of [Business.schema, Product.schema, Service.schema]) {
+    assert.ok(schema.indexes().some(([fields]) => fields.status === 1 && fields.moderationStatus === 1 && fields.createdAt === -1));
+  }
+  assert.ok(BusinessLocation.schema.indexes().some(([fields]) => fields.location === '2dsphere'));
+  assert.ok(ContentPost.schema.indexes().some(([fields]) => fields.status === 1 && fields.moderationStatus === 1 && fields.publishedAt === -1 && fields.createdAt === -1));
+  const publicIndexes = INDEX_DEFINITIONS.filter((item) => item.name.includes('public_status_moderation'));
+  assert.equal(publicIndexes.length, 4);
 });
 
 test('payments keep settlement state separate from provider success', () => {

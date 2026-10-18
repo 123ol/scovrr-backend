@@ -10,6 +10,7 @@ const create = asyncHandler(async (req, res) => {
 });
 const list = asyncHandler(async (req, res) => sendSuccess(res, { orders: await service.listOrders(req.auth.userId) }));
 const get = asyncHandler(async (req, res) => sendSuccess(res, { order: (await service.getOrder(req.auth.userId, req.params.orderId)).toSafeJSON() }));
+const reorder = asyncHandler(async (req, res) => sendSuccess(res, await service.reorder(req.auth.userId, req.params.orderId)));
 const cancel = asyncHandler(async (req, res) => sendSuccess(res, { order: (await service.cancelPendingOrder(req.auth.userId, req.params.orderId)).toSafeJSON() }));
 
-module.exports = { preview, create, list, get, cancel };
+module.exports = { preview, create, list, get, reorder, cancel };

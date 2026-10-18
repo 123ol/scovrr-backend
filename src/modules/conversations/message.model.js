@@ -18,6 +18,7 @@ const messageSchema = new mongoose.Schema({
 }, { timestamps: true, versionKey: false });
 
 messageSchema.index({ conversationId: 1, createdAt: -1 });
+messageSchema.index({ senderId: 1, createdAt: -1 });
 
 messageSchema.methods.toSafeJSON = function toSafeJSON() { return { id: this._id.toString(), conversationId: this.conversationId.toString(), senderId: this.senderId.toString(), type: this.type, body: this.body, media: this.media, readBy: this.readBy.map((id) => id.toString()), deliveredAt: this.deliveredAt, createdAt: this.createdAt }; };
 

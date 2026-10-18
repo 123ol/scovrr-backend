@@ -38,6 +38,30 @@ const INDEX_DEFINITIONS = [
     options: {}
   },
   {
+    collection: 'businesses',
+    name: 'business_public_status_moderation_created',
+    key: { status: 1, moderationStatus: 1, createdAt: -1 },
+    options: {}
+  },
+  {
+    collection: 'products',
+    name: 'product_public_status_moderation_created',
+    key: { status: 1, moderationStatus: 1, createdAt: -1 },
+    options: {}
+  },
+  {
+    collection: 'services',
+    name: 'service_public_status_moderation_created',
+    key: { status: 1, moderationStatus: 1, createdAt: -1 },
+    options: {}
+  },
+  {
+    collection: 'contentposts',
+    name: 'content_post_public_status_moderation_published',
+    key: { status: 1, moderationStatus: 1, publishedAt: -1, createdAt: -1 },
+    options: {}
+  },
+  {
     collection: 'contentpostcomments',
     name: 'content_post_comment_post_status_created',
     key: { postId: 1, status: 1, createdAt: 1 },

@@ -140,6 +140,46 @@ async function getPublicBusinessBySlug(slug) {
   return business;
 }
 
+async function getPublicStorefront(business) {
+  const storefront = business.storefront || {};
+  const [products, services] = await Promise.all([
+    Product.find({ _id: { $in: storefront.featuredProductIds || [] }, businessId: business._id, status: 'active', moderationStatus: 'approved' }).sort({ publishedAt: -1 }),
+    Service.find({ _id: { $in: storefront.featuredServiceIds || [] }, businessId: business._id, status: 'active', moderationStatus: 'approved' }).sort({ publishedAt: -1 })
+  ]);
+  return {
+    ...business.toPublicJSON().storefront,
+    featuredProducts: products.map((product) => product.toCardJSON()),
+    featuredServices: services.map((service) => service.toCardJSON())
+  };
+}
+
+async function updateStorefront(business, input) {
+  const productIds = [...new Set(input.featuredProductIds || [])];
+  const serviceIds = [...new Set(input.featuredServiceIds || [])];
+  const [productCount, serviceCount] = await Promise.all([
+    Product.countDocuments({ _id: { $in: productIds }, businessId: business._id }),
+    Service.countDocuments({ _id: { $in: serviceIds }, businessId: business._id })
+  ]);
+  if (productCount !== productIds.length) throw new AppError(400, 'INVALID_FEATURED_PRODUCTS', 'Every featured product must belong to this business');
+  if (serviceCount !== serviceIds.length) throw new AppError(400, 'INVALID_FEATURED_SERVICES', 'Every featured service must belong to this business');
+  business.storefront = {
+    ...(business.storefront?.toObject ? business.storefront.toObject() : business.storefront || {}),
+    ...input,
+    featuredProductIds: productIds,
+    featuredServiceIds: serviceIds,
+    faqs: (input.faqs || []).map((faq, index) => ({ ...faq, order: faq.order ?? index }))
+  };
+  await business.save();
+  return business;
+}
+
+async function updateMessaging(business, input) {
+  const quickReplyTemplates = [...new Set((input.quickReplyTemplates || business.messaging?.quickReplyTemplates || []).map((value) => value.trim()).filter(Boolean))].slice(0, 6);
+  business.messaging = { greetingEnabled: Boolean(input.greetingEnabled), greetingText: input.greetingText || '', quickReplyTemplates };
+  await business.save();
+  return business;
+}
+
 async function updateCapabilities(business, capabilities) {
   const categoryIds = await validateCategories(business.categories.map((category) => category.toString()), capabilities);
   business.capabilities = capabilities;
@@ -253,7 +293,7 @@ async function submitBusiness(business) {
   if (!hasActiveLocation) {
     throw new AppError(400, 'BUSINESS_LOCATION_REQUIRED', 'Add an active shop location before submitting this business');
   }
-  if (!['draft', 'rejected'].includes(business.status)) {
+  if (!['draft', 'rejected'].includes(business.status) && !(business.status === 'pending_review' && business.verification?.status === 'additional_information_required')) {
     throw new AppError(409, 'BUSINESS_SUBMIT_NOT_AVAILABLE', 'This business cannot be submitted in its current state');
   }
   business.status = 'pending_review';
@@ -264,8 +304,44 @@ async function submitBusiness(business) {
   return business;
 }
 
-async function listBusinessesForAdmin({ status, page, limit }) {
-  const filter = status ? { status } : {};
+async function attachVerificationEvidence(business, userId, evidenceAssetIds) {
+  if (business.ownerId.toString() !== userId.toString()) {
+    throw new AppError(403, 'BUSINESS_OWNER_REQUIRED', 'Only the business owner can submit verification evidence');
+  }
+  if (!['draft', 'rejected'].includes(business.status) && business.verification?.status !== 'additional_information_required') {
+    throw new AppError(409, 'VERIFICATION_EVIDENCE_NOT_AVAILABLE', 'Verification evidence cannot be changed while this business is awaiting review');
+  }
+  const { attachEvidence } = require('../evidence/evidence.service');
+  const snapshots = await attachEvidence({
+    userId,
+    purpose: 'verification',
+    subject: { id: business._id, subjectType: 'business', subjectId: business._id },
+    evidenceAssetIds,
+    visibility: 'admin_only'
+  });
+  const current = (business.verification?.evidenceAssetIds || []).map((id) => id.toString());
+  business.verification.evidenceAssetIds = [...new Set([...current, ...snapshots.map((item) => item.evidenceId.toString())])];
+  await business.save();
+  return business;
+}
+
+function businessAdminFilter({ status, search, operatingModel, verificationStatus, moderationStatus, capability } = {}) {
+  const filter = {
+    ...(status ? { status } : {}),
+    ...(operatingModel ? { operatingModel } : {}),
+    ...(verificationStatus ? { 'verification.status': verificationStatus } : {}),
+    ...(moderationStatus ? { moderationStatus } : {}),
+    ...(capability ? { capabilities: capability } : {})
+  };
+  if (search?.trim()) {
+    const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    filter.$or = [{ name: new RegExp(escaped, 'i') }, { slug: new RegExp(escaped, 'i') }, { description: new RegExp(escaped, 'i') }];
+  }
+  return filter;
+}
+
+async function listBusinessesForAdmin({ status, search, operatingModel, verificationStatus, moderationStatus, capability, page, limit }) {
+  const filter = businessAdminFilter({ status, search, operatingModel, verificationStatus, moderationStatus, capability });
   const skip = (page - 1) * limit;
   const [businesses, total] = await Promise.all([
     Business.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
@@ -300,7 +376,13 @@ async function reviewBusiness(businessId, adminId, decision, details = {}) {
     business.status = 'active';
     business.moderationStatus = 'approved';
     business.verification.status = 'approved';
+    business.verification.level = business.verification.level === 'enhanced' ? 'enhanced' : 'verified';
     business.verification.rejectionReason = null;
+  } else if (decision === 'request_information') {
+    business.status = 'pending_review';
+    business.moderationStatus = 'pending';
+    business.verification.status = 'additional_information_required';
+    business.verification.rejectionReason = details.reason;
   } else {
     business.status = 'rejected';
     business.moderationStatus = 'rejected';
@@ -334,4 +416,4 @@ async function changeAdminStatus(businessId, adminId, status, reason) {
   return { business, before };
 }
 
-module.exports = { createBusiness, listUserBusinesses, getPublicBusinessBySlug, updateCapabilities, addLocation, listLocations, updateLocation, submitBusiness, listBusinessesForAdmin, getAdminDetail, reviewBusiness, changeAdminStatus, validateCategories, uniqueBusinessSlug };
+module.exports = { createBusiness, listUserBusinesses, getPublicBusinessBySlug, getPublicStorefront, updateStorefront, updateMessaging, updateCapabilities, addLocation, listLocations, updateLocation, submitBusiness, attachVerificationEvidence, listBusinessesForAdmin, businessAdminFilter, getAdminDetail, reviewBusiness, changeAdminStatus, validateCategories, uniqueBusinessSlug };

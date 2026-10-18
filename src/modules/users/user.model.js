@@ -34,6 +34,20 @@ const userSchema = new mongoose.Schema({
   emailVerifiedAt: { type: Date, default: null },
   phoneVerifiedAt: { type: Date, default: null },
   lastLoginAt: { type: Date, default: null },
+  deactivatedAt: { type: Date, default: null },
+  deactivationReason: { type: String, trim: true, maxlength: 500, default: null },
+  notificationPreferences: {
+    orderUpdates: { type: Boolean, default: true },
+    bookingUpdates: { type: Boolean, default: true },
+    messages: { type: Boolean, default: true },
+    marketing: { type: Boolean, default: true },
+    security: { type: Boolean, default: true }
+  },
+  privacyConsent: {
+    policyVersion: { type: String, trim: true, maxlength: 40, default: null },
+    acceptedAt: { type: Date, default: null },
+    source: { type: String, enum: ['settings', 'registration', 'support'], default: null }
+  },
   location: { type: userLocationSchema, default: null }
 }, { timestamps: true, versionKey: false });
 
@@ -49,6 +63,8 @@ userSchema.methods.toSafeJSON = function toSafeJSON(options = {}) {
     emailVerified: Boolean(this.emailVerifiedAt),
     phoneVerified: Boolean(this.phoneVerifiedAt),
     location: this.location || null,
+    notificationPreferences: this.notificationPreferences || {},
+    privacyConsent: this.privacyConsent?.acceptedAt ? { policyVersion: this.privacyConsent.policyVersion, acceptedAt: this.privacyConsent.acceptedAt } : null,
     createdAt: this.createdAt
   };
 

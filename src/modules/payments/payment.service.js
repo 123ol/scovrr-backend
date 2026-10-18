@@ -11,30 +11,43 @@ const { PaymentEvent } = require('./payment-event.model');
 const { Refund } = require('./refund.model');
 const { LedgerEntry } = require('../payouts/ledger-entry.model');
 const { Payout } = require('../payouts/payout.model');
+const paymentRiskService = require('./payment-risk.service');
 const inventoryService = require('../inventory/inventory.service');
 const { getPaymentProvider } = require('../../integrations/payments');
 const promotionService = require('../promotions/promotion.service');
+const { logger } = require('../../common/observability/logger');
+const { calculateCommissionMinor, getPlatformCommissionPolicy } = require('./platform-commission.service');
 
 function paymentReference() { return `SCV-PAY-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`; }
 function refundNumber() { return `SCV-RFD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`; }
 function payoutNumber() { return `SCV-PAYO-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`; }
 function payloadHash(rawBody) { return crypto.createHash('sha256').update(rawBody).digest('hex'); }
 
-async function findIdempotentPayment(userId, idempotencyKey, type) {
+async function findIdempotentPayment(userId, idempotencyKey, type, targetId = null) {
   const existing = await Payment.findOne({ idempotencyKey });
   if (!existing) return null;
   if (existing.customerId?.toString() !== userId.toString() || existing.type !== type) {
     throw new AppError(409, 'IDEMPOTENCY_KEY_REUSED', 'This payment idempotency key cannot be reused for a different customer or payment type');
+  }
+  if (targetId && ['order', 'booking'].includes(type)) {
+    const targetField = type === 'order' ? 'orderId' : 'bookingId';
+    if (existing[targetField]?.toString() !== targetId.toString()) throw new AppError(409, 'IDEMPOTENCY_KEY_REUSED', 'This payment idempotency key cannot be reused for a different payment target');
   }
   return existing;
 }
 
 async function createPaymentRecord(data) {
   try {
-    return { payment: await Payment.create(data), created: true };
+    const payment = await Payment.create(data);
+    try {
+      await paymentRiskService.assessPayment(payment);
+    } catch (riskError) {
+      logger.warn('payment.risk_assessment.failed', { error: { name: riskError.name, code: riskError.code, message: riskError.message } });
+    }
+    return { payment, created: true };
   } catch (error) {
     if (error?.code === 11000 && error.keyPattern?.idempotencyKey) {
-      return { payment: await findIdempotentPayment(data.customerId, data.idempotencyKey, data.type), created: false };
+      return { payment: await findIdempotentPayment(data.customerId, data.idempotencyKey, data.type, data.orderId || data.bookingId || null), created: false };
     }
     throw error;
   }
@@ -59,6 +72,14 @@ async function resolveTarget(userId, type, targetId) {
   return { target: booking, amountMinor, currency: booking.currency, orderId: null, bookingId: booking._id, businessId: booking.businessId };
 }
 
+async function assertPaymentTargetOwnership(userId, type, targetId) {
+  if (!mongoose.isValidObjectId(targetId)) throw new AppError(400, 'INVALID_PAYMENT_TARGET', 'The payment target is invalid');
+  const Target = type === 'order' ? Order : Booking;
+  const target = await Target.findOne({ _id: targetId, customerId: userId }).select('_id');
+  if (!target) throw new AppError(404, type === 'order' ? 'ORDER_NOT_FOUND' : 'BOOKING_NOT_FOUND', `${type === 'order' ? 'Order' : 'Booking'} not found`);
+  return target;
+}
+
 async function updateTargetPayment(targetData, payment, note) {
   const target = targetData.target;
   target.paymentStatus = 'pending';
@@ -69,7 +90,7 @@ async function updateTargetPayment(targetData, payment, note) {
 
 async function initializePayment(userId, type, targetId, input = {}) {
   const idempotencyKey = input.idempotencyKey || `${type}:${targetId}:${userId}`;
-  const existing = await findIdempotentPayment(userId, idempotencyKey, type);
+  const existing = await findIdempotentPayment(userId, idempotencyKey, type, targetId);
   if (canReusePayment(existing)) return existing;
   const provider = getPaymentProvider(input.provider || 'paystack');
   const customer = await User.findById(userId).select('email firstName lastName');
@@ -94,6 +115,16 @@ async function initializePayment(userId, type, targetId, input = {}) {
     await payment.save();
     throw error;
   }
+}
+
+async function retryPayment(userId, type, targetId, input = {}) {
+  // Check ownership before returning an existing payment. Otherwise a retry for
+  // another customer's target could disclose that customer's payment record.
+  await assertPaymentTargetOwnership(userId, type, targetId);
+  const activePayment = await Payment.findOne({ ...(type === 'order' ? { orderId: targetId } : { bookingId: targetId }), status: { $in: ['initialized', 'pending', 'successful'] } }).sort({ createdAt: -1 });
+  if (activePayment) return activePayment;
+  const retryKey = input.idempotencyKey || `retry:${type}:${targetId}:${Date.now().toString(36)}:${crypto.randomBytes(4).toString('hex')}`;
+  return initializePayment(userId, type, targetId, { ...input, idempotencyKey: retryKey });
 }
 
 async function initializeSubscriptionPayment(userId, businessId, input = {}) {
@@ -124,6 +155,17 @@ async function initializeSubscriptionPayment(userId, businessId, input = {}) {
     attempt.status = 'failed'; attempt.errorCategory = error.code || 'provider_error'; attempt.completedAt = new Date(); await attempt.save();
     throw error;
   }
+}
+
+async function initializeSubscriptionRecoveryPayment(userId, businessId, input = {}) {
+  const subscriptionService = require('../subscriptions/subscription.service');
+  const recovery = await subscriptionService.prepareRecoveryCheckout(businessId);
+  return initializeSubscriptionPayment(userId, businessId, {
+    ...input,
+    planVersionId: recovery.version._id.toString(),
+    billingInterval: recovery.price.billingInterval,
+    idempotencyKey: input.idempotencyKey || subscriptionService.recoveryIdempotencyKey(businessId, recovery.subscription._id)
+  });
 }
 
 async function initializePromotionPayment(userId, campaign, funding, input = {}) {
@@ -162,11 +204,12 @@ async function recordSettlementLedger(payment, businessId) {
   if (payment.type === 'promotion') {
     return createLedgerEntry({ idempotencyKey: `payment:${payment._id}:promotion`, accountType: 'platform', accountId: null, businessId: businessId || payment.businessId, paymentId: payment._id, type: 'promotion_funding', direction: 'credit', amountMinor: payment.amountMinor, currency: payment.currency, metadata: { provider: payment.provider, campaignId: payment.campaignId?.toString() || null, promotionFundingId: payment.promotionFundingId?.toString() || null } });
   }
-  const commissionMinor = Math.min(Math.max(payment.amountMinor - 1, 0), Math.floor(payment.amountMinor * env.platformCommissionBps / 10_000));
+  const commissionPolicy = await getPlatformCommissionPolicy();
+  const commissionMinor = calculateCommissionMinor(payment.amountMinor, commissionPolicy.commissionBps);
   const sellerAmountMinor = payment.amountMinor - commissionMinor;
   const targetFields = { paymentId: payment._id, orderId: payment.orderId, bookingId: payment.bookingId, currency: payment.currency };
   await createLedgerEntry({ ...targetFields, idempotencyKey: `payment:${payment._id}:customer`, accountType: 'platform', accountId: null, type: 'customer_payment', direction: 'credit', amountMinor: payment.amountMinor, metadata: { provider: payment.provider } });
-  if (commissionMinor > 0) await createLedgerEntry({ ...targetFields, idempotencyKey: `payment:${payment._id}:commission`, accountType: 'platform', accountId: null, type: 'platform_commission', direction: 'credit', amountMinor: commissionMinor, metadata: { commissionBps: env.platformCommissionBps } });
+  if (commissionMinor > 0) await createLedgerEntry({ ...targetFields, idempotencyKey: `payment:${payment._id}:commission`, accountType: 'platform', accountId: null, type: 'platform_commission', direction: 'credit', amountMinor: commissionMinor, metadata: { commissionBps: commissionPolicy.commissionBps } });
   if (sellerAmountMinor > 0) await createLedgerEntry({ ...targetFields, idempotencyKey: `payment:${payment._id}:seller`, accountType: 'business', accountId: businessId, businessId, type: 'seller_credit', direction: 'credit', amountMinor: sellerAmountMinor, metadata: { grossAmountMinor: payment.amountMinor, commissionMinor } });
   await createPayoutForPayment(payment, businessId, sellerAmountMinor, payment.currency);
 }
@@ -211,7 +254,7 @@ async function settleSuccessfulPayment(payment, providerData = {}) {
       order.timeline.push({ status: 'paid', actorId: null, note: 'Payment verified by the provider.' });
       await order.save();
       await require('../analytics/domain-event.service').queue('ORDER_PAID', { userId: order.customerId, actorType: 'system', businessId, locationId: order.fulfillmentLocationId, entityType: 'order', entityId: order._id, metadata: { orderId: order._id.toString(), paymentId: payment._id.toString(), amountMinor: payment.amountMinor, currency: payment.currency, discountMinor: order.discountMinor } }, `order:${order._id}:paid`);
-      try { await require('../advertising/promotion-event.service').recordConversionForOrder(order); } catch (error) { console.error('Unable to record promotion order attribution:', error.message); }
+      try { await require('../advertising/promotion-event.service').recordConversionForOrder(order); } catch (error) { logger.error('payment.promotion_order_attribution.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
     } else {
       order.paymentStatus = 'successful';
       order.timeline.push({ status: order.status, actorId: null, note: 'Payment verified after the order had already changed state; reconciliation may be required.' });
@@ -227,7 +270,7 @@ async function settleSuccessfulPayment(payment, providerData = {}) {
       await BookingSlotLock.updateMany({ bookingId: booking._id }, { $set: { expiresAt: booking.endAt } });
     }
     await promotionService.consumePromotionForBooking(booking._id);
-    try { await require('../advertising/promotion-event.service').recordConversionForBooking(booking); } catch (error) { console.error('Unable to record promotion booking attribution:', error.message); }
+    try { await require('../advertising/promotion-event.service').recordConversionForBooking(booking); } catch (error) { logger.error('payment.promotion_booking_attribution.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
     booking.timeline.push({ status: booking.status, actorId: null, note: 'Payment verified by the provider.' });
     await booking.save();
     await require('../analytics/domain-event.service').queue(booking.status === 'confirmed' ? 'BOOKING_CONFIRMED' : 'BOOKING_CREATED', { userId: booking.customerId, actorType: 'system', businessId: booking.businessId, locationId: booking.locationId, entityType: 'booking', entityId: booking._id, metadata: { bookingId: booking._id.toString(), paymentId: payment._id.toString(), amountMinor: payment.amountMinor, currency: payment.currency, status: booking.status } }, `booking:${booking._id}:${booking.status === 'confirmed' ? 'confirmed' : 'paid'}`);
@@ -400,12 +443,13 @@ async function completeRefund(refund) {
   try {
     const { createNotification } = require('../notifications/notification.service');
     await createNotification({ deduplicationKey: `refund:${refund._id}:customer`, userId: payment.customerId, type: 'refund_completed', title: 'Refund completed', body: `A refund of ${payment.currency} ${(refund.amountMinor / 100).toLocaleString()} has been completed.`, data: { refundId: refund._id.toString(), paymentId: payment._id.toString(), subscriptionId: payment.subscriptionId?.toString() || null, campaignId: payment.campaignId?.toString() || null } });
-  } catch (error) { console.error('Unable to create refund notification:', error.message); }
-  try { await require('../audit/audit.service').recordAudit({ actorType: 'system', action: 'REFUND_EXECUTED', targetType: 'refund', targetId: refund._id, businessId, reason: refund.reason, after: refund.toSafeJSON() }); } catch (error) { console.error('Unable to record refund audit event:', error.message); }
+  } catch (error) { logger.error('refund.notification.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
+  try { await require('../audit/audit.service').recordAudit({ actorType: 'system', action: 'REFUND_EXECUTED', targetType: 'refund', targetId: refund._id, businessId, reason: refund.reason, after: refund.toSafeJSON() }); } catch (error) { logger.error('refund.audit.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
   return payment;
 }
 
 async function getPayment(userId, paymentId) { const payment = await Payment.findOne({ _id: paymentId, customerId: userId }); if (!payment) throw new AppError(404, 'PAYMENT_NOT_FOUND', 'Payment not found'); return payment; }
 async function listAdminPayments(query) { const filter = { ...(query.status ? { status: query.status } : {}), ...(query.type ? { type: query.type } : {}) }; const skip = (query.page - 1) * query.limit; const [payments, total] = await Promise.all([Payment.find(filter).sort({ createdAt: -1 }).skip(skip).limit(query.limit), Payment.countDocuments(filter)]); return { payments: payments.map((payment) => payment.toSafeJSON()), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) }; }
+async function listPaymentRiskAssessments(query) { return paymentRiskService.listAssessments(query); }
 
-module.exports = { paymentReference, refundNumber, payoutNumber, payloadHash, initializePayment, initializeSubscriptionPayment, initializePromotionPayment, verifyPayment, processPaystackWebhook, requestRefund, completeRefund, getPayment, listAdminPayments, settleSuccessfulPayment, recordSettlementLedger };
+module.exports = { paymentReference, refundNumber, payoutNumber, payloadHash, initializePayment, retryPayment, initializeSubscriptionPayment, initializeSubscriptionRecoveryPayment, initializePromotionPayment, verifyPayment, processPaystackWebhook, requestRefund, completeRefund, getPayment, listAdminPayments, listPaymentRiskAssessments, settleSuccessfulPayment, recordSettlementLedger };

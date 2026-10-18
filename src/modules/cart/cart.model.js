@@ -10,7 +10,8 @@ const cartItemSchema = new mongoose.Schema({
 const cartSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
   items: { type: [cartItemSchema], default: [], validate: [(items) => items.length <= 100, 'A cart cannot contain more than 100 lines'] },
-  appliedCouponCode: { type: String, trim: true, uppercase: true, maxlength: 40, default: null }
+  appliedCouponCode: { type: String, trim: true, uppercase: true, maxlength: 40, default: null },
+  abandonedReminderSentAt: { type: Date, default: null }
 }, { timestamps: true, versionKey: false });
 
 const Cart = mongoose.model('Cart', cartSchema);

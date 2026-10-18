@@ -55,6 +55,46 @@ const updateProductSchema = z.object({
   query: z.record(z.never()).default({})
 });
 
+const bulkProductPatch = z.object({
+  name: z.string().trim().min(2).max(180).optional(),
+  brand: z.string().trim().max(120).optional(),
+  condition: z.enum(['new', 'like_new', 'excellent', 'good', 'fair']).optional(),
+  tags: z.array(z.string().trim().min(1).max(60)).max(30).optional(),
+  basePriceMinor: z.number().int().positive().optional(),
+  compareAtPriceMinor: z.number().int().min(0).nullable().optional(),
+  lowStockThreshold: z.number().int().min(0).optional()
+}).strict();
+
+const bulkUpdateProductSchema = z.object({
+  body: z.object({ updates: z.array(z.object({ productId: objectId, patch: bulkProductPatch })).min(1).max(50) }),
+  params: z.object({ businessId: objectId }),
+  query: z.record(z.never()).default({})
+});
+
+const bulkCreateProductSchema = z.object({
+  body: z.object({ commit: z.boolean().default(false), products: z.array(productBody).min(1).max(25) }),
+  params: z.object({ businessId: objectId }),
+  query: z.record(z.never()).default({})
+});
+
+const bulkCsvProductSchema = z.object({
+  body: z.object({ csv: z.string().trim().min(1).max(100_000), commit: z.boolean().default(false) }),
+  params: z.object({ businessId: objectId }),
+  query: z.record(z.never()).default({})
+});
+
+const productImportJobSchema = z.object({
+  body: z.object({ csv: z.string().trim().min(1).max(100_000) }),
+  params: z.object({ businessId: objectId }),
+  query: z.record(z.never()).default({})
+});
+
+const productImportJobIdSchema = z.object({
+  body: z.record(z.never()).default({}),
+  params: z.object({ businessId: objectId, importJobId: objectId }),
+  query: z.record(z.never()).default({})
+});
+
 const productIdSchema = z.object({
   body: z.record(z.never()).default({}),
   params: z.object({ businessId: objectId, productId: objectId }),
@@ -65,6 +105,17 @@ const productListSchema = z.object({
   body: z.record(z.never()).default({}),
   params: z.object({ businessId: objectId }),
   query: z.object({ status: z.enum(['draft', 'pending_review', 'active', 'rejected', 'archived', 'sold_out']).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(25) })
+});
+
+const duplicateProductSchema = z.object({
+  body: z.record(z.never()).default({}),
+  params: z.object({ businessId: objectId }),
+  query: z.object({ name: z.string().trim().min(2).max(180), categoryId: objectId.optional(), productId: objectId.optional() })
+});
+const productExportSchema = z.object({
+  body: z.record(z.never()).default({}),
+  params: z.object({ businessId: objectId }),
+  query: z.object({ status: z.enum(['draft', 'pending_review', 'active', 'rejected', 'archived', 'sold_out']).optional(), format: z.enum(['json', 'csv']).default('json') })
 });
 
 const inventoryAdjustmentSchema = z.object({
@@ -91,4 +142,4 @@ const productReviewIdSchema = z.object({
   query: z.record(z.never()).default({})
 });
 
-module.exports = { createProductSchema, updateProductSchema, productIdSchema, productListSchema, inventoryAdjustmentSchema, adminProductListSchema, rejectProductSchema, productReviewIdSchema };
+module.exports = { productBody, createProductSchema, updateProductSchema, bulkUpdateProductSchema, bulkCreateProductSchema, bulkCsvProductSchema, productImportJobSchema, productImportJobIdSchema, productIdSchema, productListSchema, duplicateProductSchema, productExportSchema, inventoryAdjustmentSchema, adminProductListSchema, rejectProductSchema, productReviewIdSchema };

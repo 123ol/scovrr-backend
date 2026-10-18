@@ -11,6 +11,7 @@ const ENTITY_MODELS = {
   business: () => require('../businesses/business.model').Business,
   product: () => require('../products/product.model').Product,
   service: () => require('../services/service.model').Service,
+  content_post: () => require('../content-posts/content-post.model').ContentPost,
   order: () => require('../orders/order.model').Order,
   booking: () => require('../bookings/booking.model').Booking
 };

@@ -13,5 +13,6 @@ const reviewDisputeSchema = z.object({ body: z.object({ note: z.string().trim().
 const resolveDisputeSchema = z.object({ body: z.object({ outcome: z.enum(['full_refund', 'partial_refund', 'release_to_business', 'no_financial_action', 'refund_full', 'refund_partial', 'no_refund']), amountMinor: z.number().int().positive().optional(), note: z.string().trim().min(5).max(4_000), idempotencyKey: z.string().trim().min(8).max(160).optional() }), params: z.object({ disputeId: objectId }), query: z.record(z.never()).default({}) });
 const noteSchema = z.object({ body: z.object({ body: z.string().trim().min(1).max(4_000) }), params: z.object({ disputeId: objectId }), query: z.record(z.never()).default({}) });
 const attachEvidenceSchema = z.object({ body: z.object({ evidenceAssetIds }), params: z.object({ disputeId: objectId }), query: z.record(z.never()).default({}) });
+const policySchema = z.object({ body: z.record(z.never()).default({}), params: z.record(z.never()).default({}), query: z.record(z.never()).default({}) });
 
-module.exports = { createDisputeSchema, disputeIdSchema, disputeListSchema, businessDisputeListSchema, respondDisputeSchema, assignDisputeSchema, reviewDisputeSchema, resolveDisputeSchema, noteSchema, attachEvidenceSchema };
+module.exports = { createDisputeSchema, disputeIdSchema, disputeListSchema, businessDisputeListSchema, respondDisputeSchema, assignDisputeSchema, reviewDisputeSchema, resolveDisputeSchema, noteSchema, attachEvidenceSchema, policySchema };

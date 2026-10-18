@@ -5,6 +5,7 @@ const { env, assertRuntimeConfig } = require('./config/env');
 const { connectDatabase } = require('./config/database');
 const { attachSocketServer } = require('./sockets');
 const { startBackgroundJobs } = require('./jobs/job-runner');
+const { logger, captureException } = require('./common/observability/logger');
 
 async function startServer() {
   assertRuntimeConfig();
@@ -14,14 +15,14 @@ async function startServer() {
   attachSocketServer(io);
   const stopBackgroundJobs = startBackgroundJobs({ pollIntervalMs: env.jobPollIntervalMs, recurringIntervalMs: env.jobRecurringIntervalMs, autoPayouts: env.autoPayoutsEnabled, reconciliation: env.reconciliationEnabled });
   httpServer.listen(env.port, () => {
-    console.info(`SCOVRR API listening on port ${env.port}`);
+    logger.info('server.started', { port: env.port, socketIO: true, backgroundJobs: true });
   });
   return { httpServer, io, stopBackgroundJobs };
 }
 
 if (require.main === module) {
   startServer().catch((error) => {
-    console.error('Unable to start SCOVRR API:', error.message);
+    captureException(error, { event: 'server.start.failed' });
     process.exitCode = 1;
   });
 }

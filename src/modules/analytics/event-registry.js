@@ -3,10 +3,10 @@ const EVENT_ACTORS = Object.freeze(['user', 'anonymous', 'business', 'system']);
 const EVENT_SOURCES = Object.freeze(['APP', 'WEB', 'ADMIN', 'API', 'SYSTEM', 'HOME', 'NEAR_YOU', 'CATEGORY', 'SEARCH', 'BUSINESS_PROFILE', 'FOLLOWING', 'SPONSORED']);
 const EVENT_PLATFORMS = Object.freeze(['ios', 'android', 'web', 'admin', 'server']);
 const COMMON_METADATA_KEYS = Object.freeze([
-  'query', 'queryLength', 'resultCount', 'filterCount', 'sort', 'tab', 'categoryId', 'categoryIds', 'position', 'listId',
+  'query', 'queryLength', 'resultCount', 'filterCount', 'sort', 'tab', 'categoryId', 'categoryIds', 'position', 'listId', 'postId',
   'placement', 'source', 'currency', 'amountMinor', 'quantity', 'variantId', 'orderId', 'bookingId', 'paymentId',
   'businessId', 'locationId', 'serviceId', 'productId', 'promotionId', 'campaignId', 'subscriptionId', 'planKey',
-  'discountMinor', 'reason', 'status', 'requestType', 'locationType', 'hasAvailability', 'isSponsored', 'attributionWindowDays'
+  'discountMinor', 'reason', 'status', 'requestType', 'locationType', 'hasAvailability', 'isSponsored', 'attributionWindowDays', 'watchSeconds'
 ]);
 
 const definitions = {};
@@ -25,10 +25,11 @@ define('BUSINESS_CREATED', EVENT_AUTHORITIES.SERVER, { category: 'business' });
 define('SESSION_STARTED', EVENT_AUTHORITIES.CLIENT, { clientAllowed: true, category: 'identity', retentionClass: 'short_behavioral' });
 [
   ['BUSINESS_VIEWED', 'business'], ['BUSINESS_FOLLOWED', 'business'], ['BUSINESS_UNFOLLOWED', 'business'], ['DISCOVER_VIEWED', 'discovery'],
-  ['CATEGORY_VIEWED', 'discovery'], ['SEARCH_PERFORMED', 'discovery'], ['SEARCH_RESULT_CLICKED', 'discovery'], ['PRODUCT_VIEWED', 'product'],
+  ['CATEGORY_VIEWED', 'discovery'], ['SEARCH_PERFORMED', 'discovery'], ['SEARCH_RESULT_CLICKED', 'discovery'], ['PRODUCT_IMPRESSION', 'product'], ['PRODUCT_VIEWED', 'product'],
   ['PRODUCT_SAVED', 'product'], ['PRODUCT_UNSAVED', 'product'], ['PRODUCT_ADDED_TO_CART', 'product'], ['PRODUCT_REMOVED_FROM_CART', 'product'],
   ['CHECKOUT_STARTED', 'commerce'], ['SERVICE_VIEWED', 'service'], ['SERVICE_SAVED', 'service'], ['SERVICE_UNSAVED', 'service'],
-  ['BOOKING_STARTED', 'service'], ['REVIEW_CREATED', 'engagement'], ['CONVERSATION_STARTED', 'engagement']
+  ['BOOKING_STARTED', 'service'], ['REVIEW_CREATED', 'engagement'], ['CONVERSATION_STARTED', 'engagement'],
+  ['CONTENT_POST_VIEWED', 'content'], ['CONTENT_POST_WATCHED', 'content'], ['CONTENT_POST_LIKED', 'content'], ['CONTENT_POST_SHARED', 'content']
 ].forEach(([name, category]) => define(name, EVENT_AUTHORITIES.CLIENT, { clientAllowed: true, category }));
 [
   'ORDER_CREATED', 'ORDER_PAID', 'ORDER_CANCELLED', 'ORDER_DELIVERED', 'ORDER_COMPLETED', 'ORDER_REFUNDED',

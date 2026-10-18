@@ -28,7 +28,10 @@ test('promotion event tokens are encrypted, short-lived, and tamper resistant', 
   const decoded = verifyPlacementToken(token);
   assert.equal(decoded.targetType, 'PRODUCT');
   const parts = token.split('.');
-  parts[3] = `${parts[3].slice(0, -2)}aa`;
+  // Change a significant first ciphertext character. Mutating the final
+  // base64url character can touch only unused padding bits and leave the
+  // decoded ciphertext unchanged.
+  parts[3] = `${parts[3].startsWith('A') ? 'B' : 'A'}${parts[3].slice(1)}`;
   assert.throws(() => verifyPlacementToken(parts.join('.')), (error) => error.code === 'INVALID_PROMOTION_EVENT_TOKEN');
 });
 

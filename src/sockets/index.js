@@ -5,8 +5,10 @@ const { User } = require('../modules/users/user.model');
 const conversationService = require('../modules/conversations/conversation.service');
 const { BusinessMembership } = require('../modules/businesses/business-membership.model');
 const { BusinessLocation } = require('../modules/businesses/business-location.model');
+const { markSocketServerStarted, markSocketConnected, markSocketDisconnected } = require('../common/observability/socket-metrics');
 
 function attachSocketServer(io) {
+  markSocketServerStarted(io.of('/').adapter?.constructor?.name || 'in-memory');
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token;
@@ -19,6 +21,8 @@ function attachSocketServer(io) {
   });
 
   io.on('connection', (socket) => {
+    markSocketConnected();
+    socket.on('disconnect', markSocketDisconnected);
     socket.join(`user:${socket.user._id.toString()}`);
     socket.on('business:join', async (input = {}, callback = () => {}) => {
       try {
@@ -34,6 +38,14 @@ function attachSocketServer(io) {
     });
     socket.on('conversation:join', async (conversationId, callback = () => {}) => {
       try { await conversationService.getConversation(socket.user._id, conversationId); socket.join(`conversation:${conversationId}`); callback({ success: true }); } catch (error) { callback({ success: false, code: error.code || 'CONVERSATION_ACCESS_DENIED' }); }
+    });
+    socket.on('conversation:typing', async (input = {}, callback = () => {}) => {
+      try {
+        if (!mongoose.isValidObjectId(input.conversationId)) throw new Error('INVALID_CONVERSATION');
+        await conversationService.getConversation(socket.user._id, input.conversationId);
+        socket.to(`conversation:${input.conversationId}`).emit('conversation:typing', { conversationId: input.conversationId, userId: socket.user._id.toString(), isTyping: Boolean(input.isTyping) });
+        callback({ success: true });
+      } catch (error) { callback({ success: false, code: error.code || error.message || 'TYPING_INDICATOR_FAILED' }); }
     });
     socket.on('message:send', async (input, callback = () => {}) => {
       try { const result = await conversationService.sendMessage(socket.user._id, input.conversationId, input); const message = result.message.toSafeJSON(); io.to(`conversation:${input.conversationId}`).emit('message:new', message); callback({ success: true, data: { message } }); } catch (error) { callback({ success: false, code: error.code || 'MESSAGE_FAILED', message: error.message }); }

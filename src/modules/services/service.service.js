@@ -8,6 +8,7 @@ const { BusinessLocation } = require('../businesses/business-location.model');
 const { ServicePriceHistory } = require('./service-price-history.model');
 const entitlementService = require('../subscriptions/entitlement.service');
 const { sanitizeCatalogueMedia, assertPublishableCatalogueMedia } = require('../media/catalogue-media.service');
+const { rankSearchResults, rankByBusinessOrder } = require('../discovery/search-ranking');
 
 async function uniqueServiceSlug(business, name) {
   const base = `${slugify(business.slug)}-${slugify(name)}`.slice(0, 170);
@@ -119,7 +120,7 @@ async function submitService(businessId, serviceId) {
 
 function searchExpression(search) { return search ? new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').trim(), 'i') : null; }
 
-async function listPublicServices({ q, categoryId, businessSlug, businessIds, locationIds, page, limit, sort = 'newest' }) {
+async function listPublicServices({ q, categoryId, businessSlug, businessIds, businessOrder, locationIds, locationType, page, limit, sort = 'newest', minPriceMinor, maxPriceMinor }) {
   const filter = { status: 'active', moderationStatus: 'approved' };
   const andFilters = [];
   if (categoryId) filter.categoryId = categoryId;
@@ -129,16 +130,26 @@ async function listPublicServices({ q, categoryId, businessSlug, businessIds, lo
     filter.businessId = business._id;
   }
   if (businessIds) filter.businessId = { $in: businessIds };
+  if (minPriceMinor !== undefined || maxPriceMinor !== undefined) filter.basePriceMinor = { ...(minPriceMinor !== undefined ? { $gte: minPriceMinor } : {}), ...(maxPriceMinor !== undefined ? { $lte: maxPriceMinor } : {}) };
+  if (locationType) filter.locationTypes = locationType;
   if (locationIds) {
     andFilters.push({ $or: locationIds.length ? [{ locationIds: { $in: locationIds } }, { locationIds: { $size: 0 } }] : [{ locationIds: { $size: 0 } }] });
   }
   const expression = searchExpression(q);
   if (expression) andFilters.push({ $or: [{ name: expression }, { description: expression }, { shortDescription: expression }] });
   if (andFilters.length) filter.$and = andFilters;
+  const relevanceSearch = Boolean(q && sort === 'newest');
   const sortValue = sort === 'price_low' ? { basePriceMinor: 1 } : sort === 'price_high' ? { basePriceMinor: -1 } : { createdAt: -1 };
   const skip = (page - 1) * limit;
-  const [services, total] = await Promise.all([Service.find(filter).sort(sortValue).skip(skip).limit(limit).populate('businessId', 'name slug status moderationStatus'), Service.countDocuments(filter)]);
-  return { services: services.map((service) => ({ ...service.toCardJSON(), business: service.businessId ? { id: service.businessId._id.toString(), name: service.businessId.name, slug: service.businessId.slug } : null })), total, page, limit, pages: Math.ceil(total / limit) };
+  const locationAware = !q && Array.isArray(businessOrder) && businessOrder.length > 0;
+  const candidateLimit = relevanceSearch || locationAware ? Math.min(500, Math.max(limit * 5, skip + limit)) : limit;
+  const [services, total] = await Promise.all([Service.find(filter).sort(sortValue).skip(relevanceSearch || locationAware ? 0 : skip).limit(candidateLimit).populate('businessId', 'name slug status moderationStatus'), Service.countDocuments(filter)]);
+  const ranked = relevanceSearch ? rankSearchResults(services, q, (service) => [
+    { value: service.name, weight: 10 },
+    { value: service.shortDescription, weight: 4 },
+    { value: service.description, weight: 2 }
+  ], { businessOrder, getBusinessId: (service) => service.businessId }) : (locationAware ? rankByBusinessOrder(services, businessOrder, (service) => service.businessId) : services);
+  return { services: ranked.slice(relevanceSearch || locationAware ? skip : 0, relevanceSearch || locationAware ? skip + limit : limit).map((service) => ({ ...service.toCardJSON(), business: service.businessId ? { id: service.businessId._id.toString(), name: service.businessId.name, slug: service.businessId.slug } : null })), total, page, limit, pages: Math.ceil(total / limit) };
 }
 
 async function getPublicService(slug) {

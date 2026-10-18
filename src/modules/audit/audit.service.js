@@ -54,4 +54,16 @@ async function listAuditLogs(query) {
   return { logs: logs.map((log) => ({ ...log.toSafeJSON(), actor: log.actorId?.email ? { id: log.actorId._id.toString(), firstName: log.actorId.firstName, lastName: log.actorId.lastName, email: log.actorId.email } : null })), total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
 }
 
-module.exports = { recordAudit, listAuditLogs, safeAuditValue };
+async function getAuditSummary({ from, to } = {}) {
+  const filter = (from || to) ? { createdAt: { ...(from ? { $gte: new Date(from) } : {}), ...(to ? { $lte: new Date(to) } : {}) } } : {};
+  const [events, actorTypes, actions, targets, securityEvents] = await Promise.all([
+    AuditLog.countDocuments(filter),
+    AuditLog.aggregate([{ $match: filter }, { $group: { _id: '$actorType', count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }]),
+    AuditLog.aggregate([{ $match: filter }, { $group: { _id: '$action', count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }, { $limit: 30 }]),
+    AuditLog.aggregate([{ $match: filter }, { $group: { _id: '$targetType', count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }, { $limit: 20 }]),
+    AuditLog.aggregate([{ $match: { ...filter, action: { $regex: /security|login|suspend|role|permission|credential/i } } }, { $group: { _id: '$action', count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }, { $limit: 20 }])
+  ]);
+  return { range: { from: from ? new Date(from) : null, to: to ? new Date(to) : null }, totals: { events, adminEvents: actorTypes.find((row) => row._id === 'admin')?.count || 0, systemEvents: actorTypes.find((row) => row._id === 'system')?.count || 0, securityEvents: securityEvents.reduce((sum, row) => sum + row.count, 0) }, actorTypes: actorTypes.map((row) => ({ actorType: row._id, count: row.count })), actions: actions.map((row) => ({ action: row._id, count: row.count })), targets: targets.map((row) => ({ targetType: row._id, count: row.count })), security: securityEvents.map((row) => ({ action: row._id, count: row.count })) };
+}
+
+module.exports = { recordAudit, listAuditLogs, getAuditSummary, safeAuditValue };

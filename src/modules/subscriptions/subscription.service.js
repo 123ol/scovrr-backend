@@ -10,6 +10,7 @@ const { SubscriptionEvent } = require('./subscription-event.model');
 const entitlementService = require('./entitlement.service');
 const { env } = require('../../config/env');
 const { INITIAL_PLAN_ENTITLEMENTS, legacyEntitlementsFromMap } = require('./entitlement-registry');
+const { logger } = require('../../common/observability/logger');
 
 function invoiceNumber() { return `SCV-INV-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`; }
 async function getOrCreateBusinessSubscription(businessId) { return entitlementService.getOrCreateBusinessSubscription(businessId); }
@@ -28,7 +29,7 @@ async function listPlans({ includeDraft = false } = {}) {
 async function getBusinessOverview(businessId) {
   const effective = await entitlementService.getEffectiveEntitlements(businessId);
   const invoices = await SubscriptionInvoice.find({ businessId }).sort({ createdAt: -1 }).limit(25);
-  return { subscription: effective.subscription.toSafeJSON(), plan: effective.plan, status: effective.status, gracePeriod: effective.gracePeriod, entitlements: effective.effective, legacyEntitlements: effective.legacy, usage: effective.usage, overrides: effective.overrides, invoices: invoices.map((invoice) => invoice.toSafeJSON()), asOf: effective.asOf };
+  return { subscription: effective.subscription.toSafeJSON(), renewal: renewalState(effective.subscription, effective.asOf), plan: effective.plan, status: effective.status, gracePeriod: effective.gracePeriod, entitlements: effective.effective, legacyEntitlements: effective.legacy, usage: effective.usage, overrides: effective.overrides, invoices: invoices.map((invoice) => invoice.toSafeJSON()), asOf: effective.asOf };
 }
 
 async function resolvePlanVersion({ planVersionId, planCode, billingInterval = 'monthly' }) {
@@ -54,6 +55,21 @@ async function prepareCheckout(businessId, input) {
   if (price.amountMinor < 1) throw new AppError(400, 'FREE_PLAN_PAYMENT_NOT_REQUIRED', 'The Free plan does not require payment');
   if (subscription.planVersionId?.toString() === version._id.toString() && subscription.status === 'active' && subscription.billingInterval === input.billingInterval) throw new AppError(409, 'SUBSCRIPTION_ALREADY_ACTIVE', 'This business already has the selected plan and billing interval');
   return { business, subscription, version, price };
+}
+
+async function prepareRecoveryCheckout(businessId) {
+  const subscription = await getOrCreateBusinessSubscription(businessId);
+  if (!['past_due', 'grace_period'].includes(subscription.status)) throw new AppError(409, 'SUBSCRIPTION_RECOVERY_NOT_REQUIRED', 'This subscription does not currently need payment recovery');
+  if (!subscription.planVersionId) throw new AppError(409, 'SUBSCRIPTION_RECOVERY_CONTEXT_MISSING', 'The subscription does not have a recoverable paid plan');
+  const version = await PlanVersion.findById(subscription.planVersionId).populate('planId');
+  if (!version || !version.planId || version.planId.status !== 'active') throw new AppError(409, 'SUBSCRIPTION_RECOVERY_PLAN_UNAVAILABLE', 'The previous subscription plan is no longer available for recovery');
+  const price = version.prices.find((item) => item.billingInterval === subscription.billingInterval) || version.prices.find((item) => item.billingInterval === 'monthly');
+  if (!price || price.amountMinor < 1) throw new AppError(409, 'SUBSCRIPTION_RECOVERY_PRICE_UNAVAILABLE', 'The previous subscription price is unavailable for recovery');
+  return { subscription, version, price };
+}
+
+function recoveryIdempotencyKey(businessId, subscriptionId) {
+  return `subscription-recovery:${businessId}:${subscriptionId}`;
 }
 
 async function createInvoiceForCheckout({ businessId, subscription, version, price, idempotencyKey }) {
@@ -143,6 +159,33 @@ async function cancelAtPeriodEnd(businessId, reason = 'Cancelled by business own
   return subscription;
 }
 
+function renewalState(subscription, now = new Date()) {
+  if (!subscription || subscription.planKey === 'FREE') return { state: 'not_applicable', canResume: false, automaticCharge: 'provider_dependent', providerConfigured: false, periodEnd: null };
+  const periodOpen = Boolean(subscription.currentPeriodEnd && subscription.currentPeriodEnd > now);
+  return {
+    state: subscription.cancelAtPeriodEnd ? 'cancel_at_period_end' : 'scheduled',
+    canResume: Boolean(subscription.cancelAtPeriodEnd && periodOpen && ['active', 'cancel_at_period_end'].includes(subscription.status)),
+    automaticCharge: 'provider_dependent',
+    providerConfigured: Boolean(subscription.providerSubscriptionReference),
+    periodEnd: subscription.currentPeriodEnd || null
+  };
+}
+
+async function resumeAtPeriodEnd(businessId) {
+  const subscription = await getOrCreateBusinessSubscription(businessId);
+  const renewal = renewalState(subscription);
+  if (!subscription.cancelAtPeriodEnd) return subscription;
+  if (!renewal.canResume) throw new AppError(409, 'SUBSCRIPTION_RENEWAL_WINDOW_CLOSED', 'This subscription can no longer resume renewal for the current period');
+  subscription.cancelAtPeriodEnd = false;
+  subscription.status = 'active';
+  subscription.cancelledAt = null;
+  subscription.cancellationReason = null;
+  await subscription.save();
+  await require('../analytics/domain-event.service').queue('SUBSCRIPTION_RENEWAL_RESUMED', { actorType: 'user', businessId: subscription.businessId, entityType: 'business', entityId: subscription.businessId, metadata: { subscriptionId: subscription._id.toString(), periodEnd: subscription.currentPeriodEnd } }, `subscription:${subscription._id}:renewal-resumed:${subscription.currentPeriodEnd?.toISOString() || 'none'}`);
+  await recordEvent(subscription, 'RENEWAL_RESUMED', { periodEnd: subscription.currentPeriodEnd });
+  return subscription;
+}
+
 async function notifySubscriptionOwner(subscription, type, title, body, data = {}) {
   try {
     const business = await Business.findById(subscription.businessId).select('ownerId');
@@ -150,7 +193,7 @@ async function notifySubscriptionOwner(subscription, type, title, body, data = {
     const { createNotification } = require('../notifications/notification.service');
     await createNotification({ deduplicationKey: `subscription:${subscription._id}:${type}:${subscription.gracePeriodEndsAt?.getTime() || 'now'}`, userId: business.ownerId, type, title, body, data: { subscriptionId: subscription._id.toString(), businessId: subscription.businessId.toString(), ...data } });
   } catch (error) {
-    console.error('Unable to create subscription notification:', error.message);
+    logger.error('subscription.notification.failed', { error: { name: error.name, code: error.code, message: error.message } });
   }
 }
 
@@ -233,7 +276,7 @@ async function processSubscriptionLifecycle({ now = new Date(), limit = 100 } = 
       report.graceStarted += 1;
     } catch (error) {
       report.errors += 1;
-      console.error(`Subscription lifecycle failed for ${subscription._id}:`, error.message);
+      logger.error('subscription.lifecycle.failed', { subscriptionId: subscription._id.toString(), error: { name: error.name, code: error.code, message: error.message } });
     }
   }
   return report;
@@ -245,4 +288,4 @@ async function listInvoices(businessId, { page = 1, limit = 25 } = {}) {
   return { invoices: invoices.map((invoice) => invoice.toSafeJSON()), total, page, limit, pages: Math.ceil(total / limit) };
 }
 
-module.exports = { invoiceNumber, getOrCreateBusinessSubscription, getEntitlements, listPlans, getBusinessOverview, resolvePlanVersion, prepareCheckout, createInvoiceForCheckout, createBillingAttempt, activateFromPayment, scheduleDowngrade, cancelAtPeriodEnd, transitionToFree, markPastDue, processSubscriptionLifecycle, listInvoices, recordEvent };
+module.exports = { invoiceNumber, getOrCreateBusinessSubscription, getEntitlements, listPlans, getBusinessOverview, resolvePlanVersion, prepareCheckout, prepareRecoveryCheckout, recoveryIdempotencyKey, createInvoiceForCheckout, createBillingAttempt, activateFromPayment, scheduleDowngrade, cancelAtPeriodEnd, renewalState, resumeAtPeriodEnd, transitionToFree, markPastDue, processSubscriptionLifecycle, listInvoices, recordEvent };

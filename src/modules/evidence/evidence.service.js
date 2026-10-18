@@ -10,6 +10,9 @@ const { Report } = require('../reports/report.model');
 const { Dispute } = require('../disputes/dispute.model');
 const { BusinessMembership } = require('../businesses/business-membership.model');
 const { Conversation } = require('../conversations/conversation.model');
+const { Business } = require('../businesses/business.model');
+const { Delivery } = require('../deliveries/delivery.model');
+const { Order } = require('../orders/order.model');
 const reportService = require('../reports/report.service');
 const { assertUserCanActById } = require('../users/user-status.service');
 
@@ -27,6 +30,22 @@ function evidenceTypeForMime(mimeType) {
 
 function publicId(userId, purpose) {
   return `scovrr/evidence/${purpose}/${userId}/${crypto.randomUUID()}`;
+}
+
+function retentionExpiry() {
+  return env.evidenceRetentionDays > 0 ? new Date(Date.now() + env.evidenceRetentionDays * 86_400_000) : null;
+}
+
+function getEvidenceRetentionPolicy() {
+  return {
+    version: 'local-v1',
+    automaticRetentionEnabled: env.evidenceRetentionDays > 0,
+    retentionDays: env.evidenceRetentionDays || null,
+    uploadSessionTtlSeconds: env.evidenceUploadSessionTtlSeconds,
+    signedUrlTtlSeconds: env.evidenceSignedUrlTtlSeconds,
+    lifecycle: ['Upload sessions expire automatically.', 'Attached evidence is retained until its configured lifecycle expires.', 'Provider deletion is attempted before an evidence record is marked revoked.'],
+    notes: ['EVIDENCE_RETENTION_DAYS is disabled by default until legal and business retention policy is approved.', 'Existing records are not changed by enabling this configuration; only newly attached evidence receives a retention deadline.']
+  };
 }
 
 async function assertDisputeAccess(userId, disputeId) {
@@ -60,6 +79,31 @@ async function createUploadSession(userId, input) {
     assertObjectId(input.disputeId);
     await assertDisputeAccess(userId, input.disputeId);
     disputeId = input.disputeId;
+  } else if (input.purpose === 'verification') {
+    assertObjectId(input.subjectId);
+    const [business, membership] = await Promise.all([
+      Business.findById(input.subjectId).select('_id ownerId status verification.status'),
+      BusinessMembership.findOne({ businessId: input.subjectId, userId, status: 'active' }).select('role permissions')
+    ]);
+    if (!business) throw new AppError(404, 'BUSINESS_NOT_FOUND', 'Business not found');
+    if (!membership || (membership.role !== 'owner' && !membership.permissions.includes('*') && !membership.permissions.includes('business.manage'))) {
+      throw new AppError(403, 'VERIFICATION_EVIDENCE_ACCESS_REQUIRED', 'Only an authorized business owner can add verification evidence');
+    }
+    if (!['draft', 'rejected'].includes(business.status) && business.verification?.status !== 'additional_information_required') {
+      throw new AppError(409, 'VERIFICATION_EVIDENCE_NOT_AVAILABLE', 'Verification evidence cannot be changed while this business is awaiting review');
+    }
+    contextSubjectType = 'business';
+    contextSubjectId = business._id;
+  } else if (input.purpose === 'delivery') {
+    assertObjectId(input.subjectId);
+    const delivery = await Delivery.findById(input.subjectId).select('_id businessId status');
+    if (!delivery) throw new AppError(404, 'DELIVERY_NOT_FOUND', 'Delivery not found');
+    const membership = await BusinessMembership.findOne({ businessId: delivery.businessId, userId, status: 'active' }).select('role permissions');
+    const allowed = membership && (membership.role === 'owner' || membership.permissions.includes('*') || membership.permissions.some((permission) => ['orders.manage', 'orders.fulfill'].includes(permission)));
+    if (!allowed) throw new AppError(403, 'DELIVERY_EVIDENCE_ACCESS_REQUIRED', 'Only an authorized seller can add delivery proof');
+    if (['cancelled', 'completed', 'delivered', 'picked_up_by_customer'].includes(delivery.status)) throw new AppError(409, 'DELIVERY_PROOF_NOT_AVAILABLE', 'Proof cannot be added after delivery is complete');
+    contextSubjectType = 'delivery';
+    contextSubjectId = delivery._id;
   } else {
     assertObjectId(input.subjectId);
     const conversation = await Conversation.findOne({ _id: input.subjectId, participantIds: userId }).select('_id');
@@ -96,7 +140,7 @@ async function completeUploadSession(userId, sessionId, input) {
     try { await provider.deleteAsset({ providerAssetId: session.expectedProviderAssetId }); } catch (_cleanupError) { /* provider cleanup is best effort; the session TTL still closes the reference */ }
     throw error;
   }
-  const asset = await EvidenceAsset.create({ purpose: session.purpose, contextSubjectType: session.contextSubjectType, contextSubjectId: session.contextSubjectId, disputeId: session.disputeId, sessionId: session._id, uploadedBy: userId, provider: verified.provider, providerAssetId: verified.providerAssetId, storageKey: verified.storageKey, version: verified.version, type: evidenceTypeForMime(verified.mimeType), mimeType: verified.mimeType, format: verified.format, sizeBytes: verified.bytes, originalName: input.originalName || null, alt: input.alt || null, visibility: 'parties', status: 'uploaded' });
+  const asset = await EvidenceAsset.create({ purpose: session.purpose, contextSubjectType: session.contextSubjectType, contextSubjectId: session.contextSubjectId, disputeId: session.disputeId, sessionId: session._id, uploadedBy: userId, provider: verified.provider, providerAssetId: verified.providerAssetId, storageKey: verified.storageKey, version: verified.version, type: evidenceTypeForMime(verified.mimeType), mimeType: verified.mimeType, format: verified.format, sizeBytes: verified.bytes, originalName: input.originalName || null, alt: input.alt || null, visibility: session.purpose === 'verification' ? 'admin_only' : 'parties', status: 'uploaded' });
   session.status = 'uploaded'; session.evidenceId = asset._id; await session.save();
   return asset;
 }
@@ -104,7 +148,15 @@ async function completeUploadSession(userId, sessionId, input) {
 async function attachEvidence({ userId, purpose, subject, evidenceAssetIds, visibility = 'parties' }) {
   await assertUserCanActById(userId);
   const ids = [...new Set((evidenceAssetIds || []).map(String))];
-  const max = purpose === 'report' ? env.reportMaxEvidenceItems : env.disputeMaxEvidenceItems;
+  const max = purpose === 'report'
+    ? env.reportMaxEvidenceItems
+    : purpose === 'dispute'
+      ? env.disputeMaxEvidenceItems
+      : purpose === 'verification'
+        ? env.verificationMaxEvidenceItems
+      : purpose === 'delivery'
+        ? 3
+        : env.reportMaxEvidenceItems;
   if (ids.length > max) throw new AppError(400, 'EVIDENCE_LIMIT_EXCEEDED', `A maximum of ${max} evidence item(s) is allowed`);
   if (!ids.length) return [];
   if (ids.some((id) => !mongoose.isValidObjectId(id))) throw new AppError(400, 'INVALID_EVIDENCE_ID', 'One or more evidence references are invalid');
@@ -113,18 +165,22 @@ async function attachEvidence({ userId, purpose, subject, evidenceAssetIds, visi
   for (const asset of assets) {
     const contextMatches = purpose === 'report'
       ? asset.contextSubjectType === subject.subjectType && asset.contextSubjectId?.toString() === subject.subjectId.toString()
-      : asset.disputeId?.toString() === subject.subjectId.toString();
+      : purpose === 'verification'
+        ? asset.contextSubjectType === 'business' && asset.contextSubjectId?.toString() === subject.subjectId.toString()
+        : purpose === 'delivery'
+          ? asset.contextSubjectType === 'delivery' && asset.contextSubjectId?.toString() === subject.subjectId.toString()
+        : asset.disputeId?.toString() === subject.subjectId.toString();
     if (!contextMatches) throw new AppError(403, 'EVIDENCE_CONTEXT_MISMATCH', 'Evidence was prepared for a different case');
   }
   const claimedIds = [];
   try {
     for (const asset of assets) {
-      const updated = await EvidenceAsset.findOneAndUpdate({ _id: asset._id, status: 'uploaded' }, { $set: { subjectType: purpose, subjectId: subject.id, visibility, status: 'attached', attachedAt: new Date() } }, { new: true });
+      const updated = await EvidenceAsset.findOneAndUpdate({ _id: asset._id, status: 'uploaded' }, { $set: { subjectType: purpose, subjectId: subject.id, visibility, status: 'attached', attachedAt: new Date(), retentionExpiresAt: retentionExpiry() } }, { new: true });
       if (!updated) throw new AppError(409, 'EVIDENCE_ALREADY_ATTACHED', 'Evidence was already attached to another case');
       claimedIds.push(asset._id);
     }
   } catch (error) {
-    if (claimedIds.length) await EvidenceAsset.updateMany({ _id: { $in: claimedIds }, status: 'attached', subjectId: subject.id }, { $set: { status: 'uploaded', subjectType: null, subjectId: null, visibility: 'parties', attachedAt: null } });
+    if (claimedIds.length) await EvidenceAsset.updateMany({ _id: { $in: claimedIds }, status: 'attached', subjectId: subject.id }, { $set: { status: 'uploaded', subjectType: null, subjectId: null, visibility: purpose === 'verification' ? 'admin_only' : 'parties', attachedAt: null, retentionExpiresAt: null } });
     throw error;
   }
   return assets.map((asset) => evidenceSnapshot({ ...asset.toObject(), _id: asset._id, visibility }));
@@ -136,7 +192,13 @@ async function assertAssetAccess(userId, assetId, options = {}) {
   if (!asset || ['hidden', 'revoked'].includes(asset.status)) throw new AppError(404, 'EVIDENCE_NOT_FOUND', 'Evidence not found');
   const isAdmin = Boolean(options.admin);
   if (isAdmin) {
-    const required = asset.subjectType === 'report' ? 'reports.read' : 'disputes.read';
+    const required = asset.subjectType === 'report'
+      ? 'reports.read'
+      : asset.subjectType === 'verification'
+        ? 'verification.read'
+        : asset.subjectType === 'delivery'
+          ? 'orders.read'
+        : 'disputes.read';
     if (!options.permissions?.includes('*') && !options.permissions?.includes(required)) throw new AppError(403, 'EVIDENCE_ACCESS_DENIED', 'You do not have the permission to view this evidence');
     return asset;
   }
@@ -158,6 +220,17 @@ async function assertAssetAccess(userId, assetId, options = {}) {
     if (dispute.customerId.toString() === userId.toString()) return asset;
     const membership = await BusinessMembership.findOne({ businessId: dispute.businessId, userId, status: 'active' });
     if (membership && (membership.role === 'owner' || membership.permissions.includes('*') || membership.permissions.some((permission) => ['customers.manage', 'orders.manage', 'bookings.manage'].includes(permission)))) return asset;
+  }
+  if (asset.subjectType === 'delivery') {
+    const delivery = await Delivery.findById(asset.subjectId).select('businessId orderId');
+    if (!delivery) throw new AppError(404, 'DELIVERY_NOT_FOUND', 'Delivery not found');
+    const order = await Order.findById(delivery.orderId).select('customerId');
+    if (order?.customerId?.toString() === userId.toString()) return asset;
+    const membership = await BusinessMembership.findOne({ businessId: delivery.businessId, userId, status: 'active' });
+    if (membership && (membership.role === 'owner' || membership.permissions.includes('*') || membership.permissions.some((permission) => ['orders.read', 'orders.manage', 'orders.fulfill'].includes(permission)))) return asset;
+  }
+  if (asset.subjectType === 'verification') {
+    throw new AppError(403, 'EVIDENCE_ACCESS_DENIED', 'Verification evidence is restricted to authorized administrators');
   }
   throw new AppError(403, 'EVIDENCE_ACCESS_DENIED', 'You do not have access to this evidence');
 }
@@ -185,4 +258,22 @@ async function cleanupExpiredUploads() {
   return { cleaned };
 }
 
-module.exports = { createUploadSession, completeUploadSession, attachEvidence, assertAssetAccess, getAccessUrl, cleanupExpiredUploads, assertDisputeAccess };
+async function cleanupExpiredEvidence() {
+  if (env.evidenceRetentionDays <= 0) return { cleaned: 0, skipped: true };
+  const assets = await EvidenceAsset.find({ retentionExpiresAt: { $lte: new Date() }, status: { $in: ['uploaded', 'attached'] } }).sort({ retentionExpiresAt: 1 }).limit(100);
+  let cleaned = 0;
+  for (const asset of assets) {
+    try {
+      await getMediaProvider().deleteAsset(asset);
+      asset.status = 'revoked';
+      asset.hiddenAt = new Date();
+      await asset.save();
+      cleaned += 1;
+    } catch (_error) {
+      // Keep the asset retryable when provider deletion is temporarily unavailable.
+    }
+  }
+  return { cleaned, skipped: false };
+}
+
+module.exports = { createUploadSession, completeUploadSession, attachEvidence, assertAssetAccess, getAccessUrl, cleanupExpiredUploads, cleanupExpiredEvidence, getEvidenceRetentionPolicy, assertDisputeAccess, retentionExpiry };

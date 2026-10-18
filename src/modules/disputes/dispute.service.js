@@ -15,6 +15,7 @@ const payoutService = require('../payouts/payout.service');
 const paymentService = require('../payments/payment.service');
 const { recordAudit } = require('../audit/audit.service');
 const { assertUserCanActById } = require('../users/user-status.service');
+const { logger } = require('../../common/observability/logger');
 
 const ACTIVE_STATUSES = ['open', 'awaiting_business_response', 'awaiting_customer_response', 'under_review'];
 const ORDER_REASONS = new Set(['item_not_received', 'item_not_as_described', 'incorrect_product', 'wrong_item', 'damaged_item', 'missing_item', 'partial_delivery', 'delivery_problem', 'seller_unresponsive', 'refund_not_received', 'payment_issue', 'fraud', 'other']);
@@ -23,6 +24,18 @@ const BOOKING_REASONS = new Set(['service_not_delivered', 'service_not_as_descri
 function disputeNumber() { return `SCV-DSP-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`; }
 function activeKey(type, id) { return `${type}:${id.toString()}`; }
 function daysFor(type) { return type === 'order' ? env.disputeOrderWindowDays : env.disputeBookingWindowDays; }
+
+function getCustomerProtectionPolicy() {
+  return {
+    version: 'local-v1',
+    windows: { orderDisputeDays: env.disputeOrderWindowDays, bookingDisputeDays: env.disputeBookingWindowDays, businessResponseDays: env.disputeResponseWindowDays },
+    eligibility: { orderStatuses: ['delivered', 'completed'], bookingStatuses: ['completed', 'cancelled_by_business', 'cancelled_by_customer', 'no_show'] },
+    evidence: { maxItemsPerDispute: env.disputeMaxEvidenceItems, uploadSessionTtlSeconds: env.evidenceUploadSessionTtlSeconds, signedUrlTtlSeconds: env.evidenceSignedUrlTtlSeconds },
+    reasons: { order: [...ORDER_REASONS], booking: [...BOOKING_REASONS] },
+    outcomes: ['full_refund', 'partial_refund', 'release_to_business', 'no_financial_action'],
+    notes: ['Eligibility is evaluated against the current transaction state and dispute window.', 'Refunds and payout changes require authorized review and provider confirmation; opening a dispute does not guarantee a refund.']
+  };
+}
 
 async function paymentForTarget(type, targetId) {
   return Payment.findOne(type === 'order' ? { orderId: targetId, status: { $in: ['successful', 'partially_refunded'] } } : { bookingId: targetId, status: { $in: ['successful', 'partially_refunded'] } }).sort({ createdAt: -1 });
@@ -70,7 +83,7 @@ async function createDispute(userId, input) {
   const amountMinor = payment?.amountMinor || target.target.totalMinor || target.target.priceMinor;
   let dispute;
   try {
-  dispute = await Dispute.create({ disputeNumber: disputeNumber(), activeTransactionKey: key, customerId: userId, businessId: target.businessId, targetType: target.transactionType, transactionType: target.transactionType, orderId: target.transactionType === 'order' ? input.targetId : null, bookingId: target.transactionType === 'booking' ? input.targetId : null, reason: input.reason, description: input.description, disputedAmountMinor: amountMinor, currency: payment?.currency || target.target.currency, status: 'open', openedAt: new Date(), responseDeadline: new Date(Date.now() + 3 * 86_400_000), financialState: 'not_held', financialHold: false });
+  dispute = await Dispute.create({ disputeNumber: disputeNumber(), activeTransactionKey: key, customerId: userId, businessId: target.businessId, targetType: target.transactionType, transactionType: target.transactionType, orderId: target.transactionType === 'order' ? input.targetId : null, bookingId: target.transactionType === 'booking' ? input.targetId : null, reason: input.reason, description: input.description, disputedAmountMinor: amountMinor, currency: payment?.currency || target.target.currency, status: 'open', openedAt: new Date(), responseDeadline: new Date(Date.now() + env.disputeResponseWindowDays * 86_400_000), financialState: 'not_held', financialHold: false });
   if (input.evidenceAssetIds?.length) {
     const { attachEvidence } = require('../evidence/evidence.service');
     dispute.evidence = await attachEvidence({ userId, purpose: 'dispute', subject: { id: dispute._id, subjectId: dispute._id }, evidenceAssetIds: input.evidenceAssetIds });
@@ -91,7 +104,7 @@ async function createDispute(userId, input) {
     const { createNotification } = require('../notifications/notification.service');
     const owner = await BusinessMembership.findOne({ businessId: target.businessId, role: 'owner', status: 'active' }).select('userId');
     if (owner) await createNotification({ deduplicationKey: `dispute:${dispute._id}:business-opened`, userId: owner.userId, type: 'dispute_opened', title: 'New transaction dispute', body: `A customer opened dispute ${dispute.disputeNumber}.`, data: { disputeId: dispute._id.toString(), businessId: target.businessId.toString() } });
-  } catch (error) { console.error('Unable to notify business about dispute:', error.message); }
+  } catch (error) { logger.error('dispute.business_notification.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
   return dispute;
 }
 
@@ -142,7 +155,7 @@ async function respondAsBusiness(businessId, userId, disputeId, input) {
   try {
     const { createNotification } = require('../notifications/notification.service');
     await createNotification({ deduplicationKey: `dispute:${dispute._id}:business-response:${dispute.updatedAt.getTime()}`, userId: dispute.customerId, type: 'dispute_business_responded', title: 'Business responded to your dispute', body: `The business responded to dispute ${dispute.disputeNumber}.`, data: { disputeId: dispute._id.toString() } });
-  } catch (error) { console.error('Unable to notify customer about dispute response:', error.message); }
+  } catch (error) { logger.error('dispute.response_notification.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
   return dispute;
 }
 
@@ -231,7 +244,7 @@ async function resolveDispute(disputeId, adminId, input) {
     await createNotification({ deduplicationKey: `dispute:${dispute._id}:resolved`, userId: dispute.customerId, type: 'dispute_resolved', title: 'Dispute resolved', body: `SCOVRR resolved dispute ${dispute.disputeNumber}.`, data: { disputeId: dispute._id.toString(), outcome } });
     const owner = await BusinessMembership.findOne({ businessId: dispute.businessId, role: 'owner', status: 'active' }).select('userId');
     if (owner) await createNotification({ deduplicationKey: `dispute:${dispute._id}:business-resolved`, userId: owner.userId, type: outcome === 'release_to_business' ? 'payout_released' : 'dispute_resolved', title: 'Dispute resolved', body: `SCOVRR resolved dispute ${dispute.disputeNumber}.`, data: { disputeId: dispute._id.toString(), outcome, financialState: dispute.financialState } });
-  } catch (error) { console.error('Unable to notify customer about dispute resolution:', error.message); }
+  } catch (error) { logger.error('dispute.resolution_notification.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
   return dispute;
 }
 
@@ -240,4 +253,4 @@ async function addNote(adminId, disputeId, body) {
   return OperationalNote.create({ subjectType: 'dispute', subjectId: disputeId, authorAdminId: adminId, body });
 }
 
-module.exports = { disputeNumber, createDispute, getCustomerDispute, listCustomerDisputes, getBusinessDispute, listBusinessDisputes, respondAsBusiness, addCustomerEvidence, listAdminDisputes, getAdminDispute, assignDispute, beginReview, resolveDispute, addNote, addEvent, resolveTarget };
+module.exports = { disputeNumber, createDispute, getCustomerDispute, listCustomerDisputes, getBusinessDispute, listBusinessDisputes, respondAsBusiness, addCustomerEvidence, listAdminDisputes, getAdminDispute, assignDispute, beginReview, resolveDispute, addNote, addEvent, resolveTarget, getCustomerProtectionPolicy };

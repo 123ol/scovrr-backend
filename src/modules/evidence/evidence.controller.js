@@ -11,5 +11,6 @@ const complete = asyncHandler(async (req, res) => sendSuccess(res, { evidence: (
 
 const access = asyncHandler(async (req, res) => { const result = await service.getAccessUrl(req.auth.userId, req.params.evidenceId); return sendSuccess(res, { evidence: result.asset.toSafeJSON(), url: result.url, expiresAt: result.expiresAt }); });
 const adminAccess = asyncHandler(async (req, res) => { const result = await service.getAccessUrl(req.auth.userId, req.params.evidenceId, { admin: true, permissions: req.admin?.permissions || [] }); return sendSuccess(res, { evidence: result.asset.toSafeJSON(), url: result.url, expiresAt: result.expiresAt }); });
+const policy = asyncHandler(async (req, res) => sendSuccess(res, { policy: service.getEvidenceRetentionPolicy() }));
 
-module.exports = { createSession, complete, access, adminAccess };
+module.exports = { createSession, complete, access, adminAccess, policy };

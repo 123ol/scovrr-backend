@@ -4,6 +4,13 @@ const DELIVERY_METHODS = ['customer_pickup', 'seller_delivery', 'third_party'];
 const DELIVERY_STATUSES = ['pending', 'ready_for_pickup', 'awaiting_courier', 'picked_up', 'in_transit', 'delivery_attempted', 'delivered', 'failed', 'cancelled', 'picked_up_by_customer', 'completed'];
 
 const addressSnapshotSchema = new mongoose.Schema({}, { _id: false, strict: false });
+const courierAssignmentSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true, maxlength: 140 },
+  phone: { type: String, trim: true, maxlength: 32, default: '' },
+  note: { type: String, trim: true, maxlength: 300, default: '' },
+  assignedAt: { type: Date, default: Date.now },
+  assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
+}, { _id: false });
 
 const deliverySchema = new mongoose.Schema({
   deliveryNumber: { type: String, required: true, unique: true, index: true },
@@ -23,6 +30,7 @@ const deliverySchema = new mongoose.Schema({
   verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   estimatedPickupAt: { type: Date, default: null },
   estimatedDeliveryAt: { type: Date, default: null },
+  courierAssignment: { type: courierAssignmentSchema, default: null },
   pickedUpAt: { type: Date, default: null },
   deliveredAt: { type: Date, default: null },
   proof: { type: mongoose.Schema.Types.Mixed, default: null },
@@ -34,7 +42,7 @@ deliverySchema.index({ businessId: 1, status: 1, createdAt: -1 });
 deliverySchema.index({ locationId: 1, status: 1 });
 
 deliverySchema.methods.toSafeJSON = function toSafeJSON() {
-  return { id: this._id.toString(), deliveryNumber: this.deliveryNumber, orderId: this.orderId.toString(), businessId: this.businessId.toString(), locationId: this.locationId.toString(), method: this.method, provider: this.provider, pickupAddress: this.pickupAddressSnapshot, destinationAddress: this.destinationAddressSnapshot, providerReference: this.providerReference, feeMinor: this.feeMinor, currency: this.currency, status: this.status, estimatedPickupAt: this.estimatedPickupAt, estimatedDeliveryAt: this.estimatedDeliveryAt, pickedUpAt: this.pickedUpAt, deliveredAt: this.deliveredAt, proof: this.proof, tracking: this.tracking, timeline: this.timeline, createdAt: this.createdAt, updatedAt: this.updatedAt };
+  return { id: this._id.toString(), deliveryNumber: this.deliveryNumber, orderId: this.orderId.toString(), businessId: this.businessId.toString(), locationId: this.locationId.toString(), method: this.method, provider: this.provider, pickupAddress: this.pickupAddressSnapshot, destinationAddress: this.destinationAddressSnapshot, providerReference: this.providerReference, feeMinor: this.feeMinor, currency: this.currency, status: this.status, estimatedPickupAt: this.estimatedPickupAt, estimatedDeliveryAt: this.estimatedDeliveryAt, courierAssignment: this.courierAssignment, pickedUpAt: this.pickedUpAt, deliveredAt: this.deliveredAt, proof: this.proof, tracking: this.tracking, timeline: this.timeline, createdAt: this.createdAt, updatedAt: this.updatedAt };
 };
 
 const Delivery = mongoose.model('Delivery', deliverySchema);

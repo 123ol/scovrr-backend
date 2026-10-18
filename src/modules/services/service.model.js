@@ -67,6 +67,7 @@ const serviceSchema = new mongoose.Schema({
 
 serviceSchema.index({ businessId: 1, status: 1, createdAt: -1 });
 serviceSchema.index({ categoryId: 1, status: 1 });
+serviceSchema.index({ status: 1, moderationStatus: 1, createdAt: -1 });
 
 serviceSchema.methods.toCardJSON = function toCardJSON() {
   const businessId = this.businessId?._id || this.businessId;

@@ -32,6 +32,11 @@ const openingHoursSchema = new mongoose.Schema({
   closed: { type: Boolean, default: false }
 }, { _id: false });
 
+const deliveryZoneSchema = new mongoose.Schema({
+  state: { type: String, required: true, trim: true, maxlength: 120 },
+  cities: { type: [String], default: [], validate: (values) => values.length <= 100 }
+}, { _id: false });
+
 const locationSchema = new mongoose.Schema({
   businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true, index: true },
   name: { type: String, required: true, trim: true, maxlength: 120 },
@@ -52,7 +57,8 @@ const locationSchema = new mongoose.Schema({
     enabled: { type: Boolean, default: false },
     flatFeeMinor: { type: Number, min: 0, default: 0 },
     freeDeliveryThresholdMinor: { type: Number, min: 0, default: null },
-    estimatedDeliveryMinutes: { type: Number, min: 1, max: 10_080, default: 120 }
+    estimatedDeliveryMinutes: { type: Number, min: 1, max: 10_080, default: 120 },
+    zones: { type: [deliveryZoneSchema], default: [] }
   },
   primary: { type: Boolean, default: false, index: true },
   active: { type: Boolean, default: true, index: true }

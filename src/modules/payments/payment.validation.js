@@ -8,5 +8,6 @@ const initializeBookingSchema = z.object({ body: initializeBody, params: z.objec
 const paymentIdSchema = z.object({ body: z.record(z.never()).default({}), params: z.object({ paymentId: objectId }), query: z.record(z.never()).default({}) });
 const refundSchema = z.object({ body: z.object({ amountMinor: z.number().int().positive().optional(), reason: z.string().trim().min(5).max(1_000), idempotencyKey: idempotency }), params: z.object({ paymentId: objectId }), query: z.record(z.never()).default({}) });
 const adminPaymentListSchema = z.object({ body: z.record(z.never()).default({}), params: z.record(z.never()).default({}), query: z.object({ status: z.enum(['initialized', 'pending', 'successful', 'failed', 'abandoned', 'reversed', 'refunded', 'partially_refunded']).optional(), type: z.enum(['order', 'booking', 'subscription']).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(25) }) });
+const adminRiskListSchema = z.object({ body: z.record(z.never()).default({}), params: z.record(z.never()).default({}), query: z.object({ decision: z.enum(['allow', 'review']).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(25) }) });
 
-module.exports = { initializeSchema, initializeBookingSchema, paymentIdSchema, refundSchema, adminPaymentListSchema };
+module.exports = { initializeSchema, initializeBookingSchema, paymentIdSchema, refundSchema, adminPaymentListSchema, adminRiskListSchema };

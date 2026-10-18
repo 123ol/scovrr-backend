@@ -8,6 +8,7 @@ const { EvidenceUploadSession } = require('../src/modules/evidence/upload-sessio
 const { Dispute } = require('../src/modules/disputes/dispute.model');
 const { Review } = require('../src/modules/reviews/review.model');
 const { ADMIN_PERMISSIONS, hasAdminPermission } = require('../src/modules/admin/admin-permissions');
+const { getEvidenceRetentionPolicy, retentionExpiry, cleanupExpiredEvidence } = require('../src/modules/evidence/evidence.service');
 
 test('user suspension is a first-class status and blocks user actions', () => {
   assert.equal(User.schema.path('status').enumValues.includes('suspended'), true);
@@ -24,6 +25,15 @@ test('evidence uses expiring sessions and never serializes provider credentials'
   const safe = asset.toSafeJSON();
   assert.equal(safe.providerAssetId, undefined);
   assert.equal(safe.storageKey, undefined);
+});
+
+test('evidence retention is disabled by default and cleanup is safe until policy is configured', async () => {
+  assert.equal(EvidenceAsset.schema.path('retentionExpiresAt').instance, 'Date');
+  const policy = getEvidenceRetentionPolicy();
+  assert.equal(policy.automaticRetentionEnabled, false);
+  assert.equal(policy.retentionDays, null);
+  assert.equal(retentionExpiry(), null);
+  assert.deepEqual(await cleanupExpiredEvidence(), { cleaned: 0, skipped: true });
 });
 
 test('customer and business dispute serializers omit internal financial and admin controls', () => {

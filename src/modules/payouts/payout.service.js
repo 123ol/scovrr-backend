@@ -4,8 +4,10 @@ const { Payment } = require('../payments/payment.model');
 const { LedgerEntry } = require('./ledger-entry.model');
 const { Payout } = require('./payout.model');
 const { PayoutProfile } = require('./payout-profile.model');
+const { parseRange } = require('../analytics/analytics-range');
 const { getPayoutProvider } = require('../../integrations/payouts');
 const { recordAudit } = require('../audit/audit.service');
+const { logger } = require('../../common/observability/logger');
 
 async function markEligible() {
   await Payout.updateMany({ status: 'pending', eligibleAt: { $lte: new Date() } }, { $set: { status: 'eligible' } });
@@ -35,6 +37,42 @@ async function getPayout(businessId, payoutId) {
 
 async function getPayoutProfile(businessId) {
   return PayoutProfile.findOne({ businessId });
+}
+
+async function getEarnings(businessId, query = {}) {
+  const range = parseRange(query);
+  const businessFilter = { businessId, accountType: 'business' };
+  const periodFilter = { ...businessFilter, createdAt: { $gte: range.from, $lt: range.to } };
+  const [periodRows, balanceRows, payoutRows] = await Promise.all([
+    LedgerEntry.aggregate([{ $match: periodFilter }, { $group: { _id: { currency: '$currency', type: '$type', direction: '$direction' }, amountMinor: { $sum: '$amountMinor' } } }]),
+    LedgerEntry.aggregate([{ $match: businessFilter }, { $group: { _id: { currency: '$currency', type: '$type', direction: '$direction' }, amountMinor: { $sum: '$amountMinor' } } }]),
+    Payout.find({ businessId }).sort({ createdAt: -1 }).limit(20)
+  ]);
+  function summarize(rows) {
+    const byCurrency = new Map();
+    for (const row of rows) {
+      const currency = row._id.currency;
+      if (!currency) continue;
+      const item = byCurrency.get(currency) || { currency, creditsMinor: 0, debitsMinor: 0, sellerCreditsMinor: 0, sellerDebitsMinor: 0, payoutsMinor: 0, payoutReversalsMinor: 0 };
+      const amount = row.amountMinor || 0;
+      if (row._id.direction === 'credit') item.creditsMinor += amount;
+      if (row._id.direction === 'debit') item.debitsMinor += amount;
+      if (row._id.type === 'seller_credit') item.sellerCreditsMinor += amount;
+      if (row._id.type === 'seller_debit') item.sellerDebitsMinor += amount;
+      if (row._id.type === 'payout' && row._id.direction === 'debit') item.payoutsMinor += amount;
+      if (row._id.type === 'payout_reversal' && row._id.direction === 'credit') item.payoutReversalsMinor += amount;
+      byCurrency.set(currency, item);
+    }
+    return [...byCurrency.values()].map((item) => ({ ...item, netEarningsMinor: Math.max(item.sellerCreditsMinor - item.sellerDebitsMinor, 0), availableMinor: Math.max(item.creditsMinor - item.debitsMinor, 0) }));
+  }
+  const payoutStatusTotals = payoutRows.reduce((result, payout) => { result[payout.status] = (result[payout.status] || 0) + payout.amountMinor; return result; }, {});
+  return { range: { from: range.from, to: range.to, label: range.label }, period: summarize(periodRows), balance: summarize(balanceRows), payoutStatusTotals, recentPayouts: payoutRows.map((payout) => payout.toSafeJSON()), asOf: new Date() };
+}
+
+async function getStatement(businessId, query = {}) {
+  const range = parseRange(query);
+  const entries = await LedgerEntry.find({ businessId, accountType: 'business', createdAt: { $gte: range.from, $lt: range.to } }).sort({ createdAt: -1 }).limit(2_000).lean();
+  return { range: { from: range.from, to: range.to, label: range.label }, entries: entries.map((entry) => ({ id: entry._id.toString(), date: entry.createdAt, type: entry.type, direction: entry.direction, amountMinor: entry.amountMinor, currency: entry.currency, paymentId: entry.paymentId?.toString() || null, orderId: entry.orderId?.toString() || null, bookingId: entry.bookingId?.toString() || null })) };
 }
 
 async function holdPayout(payoutId, reason) {
@@ -116,6 +154,23 @@ async function executePayout(payoutId) {
   }
 }
 
+function canRetryPayout(payout) {
+  return payout?.status === 'failed' && !payout.providerReference;
+}
+
+async function retryPayout(payoutId) {
+  const payout = await Payout.findById(payoutId);
+  if (!payout) throw new AppError(404, 'PAYOUT_NOT_FOUND', 'Payout not found');
+  if (!canRetryPayout(payout)) {
+    throw new AppError(409, 'PAYOUT_NOT_RETRYABLE', 'Only failed payouts without a provider transfer reference can be retried');
+  }
+  payout.status = payout.eligibleAt <= new Date() ? 'eligible' : 'pending';
+  payout.failureReason = null;
+  payout.lastAttemptAt = null;
+  await payout.save();
+  return payout;
+}
+
 async function recordPayoutLedger(payout) {
   return LedgerEntry.findOneAndUpdate({ idempotencyKey: `payout:${payout._id}:business` }, { $setOnInsert: { idempotencyKey: `payout:${payout._id}:business`, accountType: 'business', accountId: payout.businessId, businessId: payout.businessId, paymentId: payout.sourcePaymentId, type: 'payout', direction: 'debit', amountMinor: payout.amountMinor, currency: payout.currency, metadata: { payoutNumber: payout.payoutNumber, providerReference: payout.providerReference } } }, { upsert: true, new: true, setDefaultsOnInsert: true });
 }
@@ -125,7 +180,7 @@ async function markPayoutPaid(payout) {
   await recordPayoutLedger(payout);
   const updated = await Payout.findOneAndUpdate({ _id: payout._id, status: { $ne: 'paid' } }, { $set: { status: 'paid', paidAt: new Date(), failureReason: null } }, { new: true });
   if (updated) {
-    try { await recordAudit({ actorType: 'system', action: 'PAYOUT_PAID', targetType: 'payout', targetId: updated._id, businessId: updated.businessId, after: updated.toSafeJSON() }); } catch (error) { console.error('Unable to record payout audit event:', error.message); }
+    try { await recordAudit({ actorType: 'system', action: 'PAYOUT_PAID', targetType: 'payout', targetId: updated._id, businessId: updated.businessId, after: updated.toSafeJSON() }); } catch (error) { logger.error('payout.audit.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
   }
   return updated || Payout.findById(payout._id);
 }
@@ -162,4 +217,4 @@ async function runEligiblePayouts({ limit = 25 } = {}) {
   return results;
 }
 
-module.exports = { markEligible, listBusinessPayouts, listAdminPayouts, getPayout, getPayoutProfile, upsertPayoutProfile, holdPayout, holdPayoutForDispute, releasePayout, releasePayoutForDispute, executePayout, verifyPayout, markPayoutPaid, runEligiblePayouts, assertPayoutCanExecute };
+module.exports = { markEligible, listBusinessPayouts, listAdminPayouts, getPayout, getPayoutProfile, getEarnings, getStatement, upsertPayoutProfile, holdPayout, holdPayoutForDispute, releasePayout, releasePayoutForDispute, executePayout, retryPayout, canRetryPayout, verifyPayout, markPayoutPaid, runEligiblePayouts, assertPayoutCanExecute };
