@@ -59,7 +59,7 @@ test('mobile video delivery uses a bounded viewport-aware Cloudinary width', () 
   assert.match(videoFeedSource, /active && activeSlide === index/);
   assert.match(videoFeedSource, /postMedia\(post\)\.length/);
   assert.match(videoFeedSource, /const itemHeight = height/);
-  assert.match(videoFeedSource, /extraData=\{\{ activeIndex, commentsPostId:/);
+  assert.match(videoFeedSource, /extraData=\{\{ activeIndex, isFeedScrolling, commentsPostId:/);
   assert.match(videoFeedSource, /pagingEnabled/);
   assert.match(videoFeedSource, /windowSize=\{3\}/);
   assert.match(discoverSource, /<Redirect href="\/video-feed"/);
@@ -93,6 +93,8 @@ test('mobile video surfaces observe power state and pause autoplay in low-power 
   assert.match(powerSource, /addLowPowerModeListener/);
   assert.match(powerSource, /shouldConstrainVideo/);
   assert.match(videoFeedSource, /subscribePowerState/);
-  assert.match(videoFeedSource, /!powerConstrained && activeIndex === index/);
+  assert.match(videoFeedSource, /!powerConstrained && !isFeedScrolling && activeIndex === index/);
+  assert.match(videoFeedSource, /onScrollBeginDrag=\{\(\) => setIsFeedScrolling\(true\)\}/);
+  assert.match(videoFeedSource, /onMomentumScrollEnd=\{settleFeedPosition\}/);
   assert.match(creatorSource, /shouldConstrainVideo\(powerState\)/);
 });
