@@ -41,12 +41,16 @@ test('Cloudinary video media receives a bounded poster URL while other providers
 test('mobile video delivery uses a bounded viewport-aware Cloudinary width', () => {
   const mediaSource = fs.readFileSync(require.resolve('../../app/src/services/media.js'), 'utf8');
   const videoFeedSource = fs.readFileSync(require.resolve('../../app/app/(consumer)/video-feed.jsx'), 'utf8');
+  const inlineVideoSource = fs.readFileSync(require.resolve('../../app/src/components/InlineVideo.jsx'), 'utf8');
   assert.match(mediaSource, /responsiveMediaWidth\(viewportWidth, density = 2/);
   assert.match(mediaSource, /Math\.min\(3, Number\(density\)/);
+  assert.match(mediaSource, /f_mp4,vc_h264,ac_aac/);
   assert.match(videoFeedSource, /responsiveMediaWidth\(width, PixelRatio\.get\(\)\)/);
   assert.match(videoFeedSource, /optimizeCloudinaryUrl\(video\.url, \{ width: videoWidth, video: true \}\)/);
   assert.match(videoFeedSource, /cloudinaryVideoPosterUrl\(video\.url, \{ width: videoWidth \}\)/);
   assert.match(videoFeedSource, /poster \? optimizeCloudinaryUrl\(poster, \{ width: videoWidth \}\) : null/);
+  assert.match(videoFeedSource, /surfaceType="textureView"/);
+  assert.match(inlineVideoSource, /statusChange/);
 });
 
 test('mobile media optimization augments existing Cloudinary transforms when width is missing', () => {

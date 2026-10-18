@@ -74,6 +74,7 @@ contentPostSchema.methods.toOwnerJSON = function toOwnerJSON() {
     taggedProductIds: this.taggedProductIds.map((id) => id.toString()),
     taggedServiceIds: this.taggedServiceIds.map((id) => id.toString()),
     hashtags: this.hashtags,
+    likesCount: this.likesCount || 0,
     commentsCount: this.commentsCount || 0,
     status: this.status,
     moderationStatus: this.moderationStatus,

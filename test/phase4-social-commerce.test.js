@@ -3,9 +3,10 @@ const { test } = require('node:test');
 const mongoose = require('mongoose');
 const { ContentPostSave } = require('../src/modules/content-posts/content-post-save.model');
 const { ContentPost } = require('../src/modules/content-posts/content-post.model');
+const { ContentPostComment } = require('../src/modules/content-posts/content-post-comment.model');
 const { ModerationCase, MODERATION_SUBJECT_TYPES } = require('../src/modules/moderation/moderation-case.model');
 const { createEventSchema } = require('../src/modules/analytics/analytics.validation');
-const { createSchema } = require('../src/modules/content-posts/content-post.validation');
+const { createSchema, commentCreateSchema, businessCommentCreateSchema } = require('../src/modules/content-posts/content-post.validation');
 const { normalizeHashtags } = require('../src/modules/content-posts/content-post.service');
 const { savedListSchema } = require('../src/modules/content-posts/content-post.validation');
 
@@ -23,6 +24,16 @@ test('public post payload exposes saved state without exposing owner fields', ()
   assert.equal('authorId' in safe, false);
 });
 
+test('seller post management exposes engagement counts and threaded comment contracts', () => {
+  const post = new ContentPost({ _id: new mongoose.Types.ObjectId(), businessId: new mongoose.Types.ObjectId(), authorId: new mongoose.Types.ObjectId(), type: 'announcement', body: 'Seller update', likesCount: 12, commentsCount: 3 });
+  assert.equal(post.toOwnerJSON().likesCount, 12);
+  assert.ok(ContentPostComment.schema.path('parentCommentId'));
+  assert.ok(ContentPostComment.schema.indexes().some(([fields]) => fields.postId && fields.parentCommentId && fields.status));
+  const parentCommentId = new mongoose.Types.ObjectId().toString();
+  assert.equal(commentCreateSchema.safeParse({ body: { body: 'A reply', parentCommentId }, params: { postId: post._id.toString() }, query: {} }).success, true);
+  assert.equal(businessCommentCreateSchema.safeParse({ body: { body: 'Seller reply', parentCommentId }, params: { businessId: post.businessId.toString(), postId: post._id.toString() }, query: {} }).success, true);
+});
+
 test('vertical feed analytics remains a client-observable event', () => {
   const result = createEventSchema.safeParse({ body: { eventName: 'CONTENT_POST_VIEWED', sessionId: 'session-12345', metadata: { postId: new mongoose.Types.ObjectId().toString(), position: 0 } }, params: {}, query: {} });
   assert.equal(result.success, true);
@@ -37,6 +48,25 @@ test('content posts preserve hashtags and support multiple catalogue tag identif
   assert.equal(ContentPost.schema.path('hashtags').instance, 'Array');
   assert.equal(ContentPost.schema.path('taggedProductIds').instance, 'Array');
   assert.equal(ContentPost.schema.path('taggedServiceIds').instance, 'Array');
+});
+
+test('content post media accepts upload metadata without optional alt text', () => {
+  const id = '507f1f77bcf86cd799439011';
+  const result = createSchema.safeParse({
+    body: {
+      type: 'announcement',
+      body: 'New video update',
+      media: [{ url: 'https://cdn.example.test/video.mp4', provider: 'cloudinary', publicId: 'scovrr/video', uploadSessionId: id, mimeType: 'video/mp4', alt: null, order: 0 }],
+      hashtags: [],
+      linkedProductId: null,
+      linkedServiceId: null,
+      taggedProductIds: [],
+      taggedServiceIds: []
+    },
+    params: { businessId: id },
+    query: {}
+  });
+  assert.equal(result.success, true);
 });
 
 test('content-post reports can persist through the moderation-case subject contract', () => {

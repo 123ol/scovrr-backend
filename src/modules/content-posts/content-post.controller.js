@@ -6,6 +6,7 @@ const saveService = require('./content-post-save.service');
 
 const create = asyncHandler(async (req, res) => res.status(201).json({ success: true, data: { post: (await service.createPost(req.business, req.body, req.auth.userId)).toOwnerJSON() } }));
 const update = asyncHandler(async (req, res) => sendSuccess(res, { post: (await service.updatePost(req.business._id, req.params.postId, req.body, req.auth.userId)).toOwnerJSON() }));
+const archive = asyncHandler(async (req, res) => sendSuccess(res, { post: (await service.archivePost(req.business._id, req.params.postId)).toOwnerJSON() }));
 const submit = asyncHandler(async (req, res) => sendSuccess(res, { post: (await service.submitPost(req.business._id, req.params.postId)).toOwnerJSON() }));
 const manageList = asyncHandler(async (req, res) => { const result = await service.listBusinessPosts(req.business._id, req.query); return sendSuccess(res, { ...result, posts: result.posts.map((post) => post.toOwnerJSON()) }); });
 const publicList = asyncHandler(async (req, res) => sendSuccess(res, await service.listPublicPosts(req.params.businessSlug, req.query, req.auth?.userId)));
@@ -16,4 +17,4 @@ const saved = asyncHandler(async (req, res) => sendSuccess(res, await service.li
 const save = asyncHandler(async (req, res) => { await saveService.add(req.auth.userId, req.params.postId); return sendSuccess(res, { saved: true }); });
 const unsave = asyncHandler(async (req, res) => { await saveService.remove(req.auth.userId, req.params.postId); return sendSuccess(res, { saved: false }); });
 
-module.exports = { create, update, submit, manageList, publicList, adminList, adminApprove, adminReject, saved, save, unsave };
+module.exports = { create, update, archive, submit, manageList, publicList, adminList, adminApprove, adminReject, saved, save, unsave };

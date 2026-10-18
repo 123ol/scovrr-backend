@@ -104,12 +104,21 @@ async function updatePost(businessId, postId, input, actorId) {
   if (input.media !== undefined) post.media = nextMedia;
   post.linkedProductId = links.linkedProductId;
   post.linkedServiceId = links.linkedServiceId;
-  if (['active', 'rejected'].includes(post.status)) {
+  if (['active', 'rejected', 'archived'].includes(post.status)) {
     post.status = 'draft';
     post.moderationStatus = 'pending';
     post.publishedAt = null;
     post.rejectionReason = null;
   }
+  await post.save();
+  return post;
+}
+
+async function archivePost(businessId, postId) {
+  const post = await ContentPost.findOne({ _id: postId, businessId });
+  if (!post) throw new AppError(404, 'CONTENT_POST_NOT_FOUND', 'Content post not found');
+  post.status = 'archived';
+  post.publishedAt = null;
   await post.save();
   return post;
 }
@@ -214,4 +223,4 @@ async function reviewPost(postId, decision, reason = null) {
   return post;
 }
 
-module.exports = { createPost, updatePost, submitPost, listBusinessPosts, listPublicPosts, listDiscoverPosts, listSavedPosts, listAdminPosts, reviewPost, assertPostHasContent, normalizeHashtags, normalizeIds, validateTags };
+module.exports = { createPost, updatePost, archivePost, submitPost, listBusinessPosts, listPublicPosts, listDiscoverPosts, listSavedPosts, listAdminPosts, reviewPost, assertPostHasContent, normalizeHashtags, normalizeIds, validateTags };
