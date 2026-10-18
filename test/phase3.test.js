@@ -11,6 +11,7 @@ const productPublicRoutes = require('../src/modules/products/product.public.rout
 const { Order } = require('../src/modules/orders/order.model');
 const { normalizeVariants } = require('../src/modules/products/product.service');
 const productService = require('../src/modules/products/product.service');
+const productAdminRoutes = require('../src/modules/products/product.admin.routes');
 const { targetValues } = require('../src/modules/inventory/inventory.service');
 const { addItemSchema } = require('../src/modules/cart/cart.validation');
 const { Cart } = require('../src/modules/cart/cart.model');
@@ -52,6 +53,18 @@ test('public product comparison remains bounded and keeps the existing route mod
   assert.equal(typeof require('../src/modules/products/product.service').similarPublicProducts, 'function');
   assert.equal(typeof productService.findDuplicateProducts, 'function');
   assert.equal(typeof productService.exportBusinessProducts, 'function');
+});
+
+test('public product visibility requires both active status and approved moderation', () => {
+  assert.deepEqual(productService.publicProductFilter(), { status: 'active', moderationStatus: 'approved' });
+  assert.deepEqual(productService.publicProductFilter({ slug: 'sample-product' }), { status: 'active', moderationStatus: 'approved', slug: 'sample-product' });
+});
+
+test('admin product operations expose a protected live-product suspension action', () => {
+  const suspendRoute = productAdminRoutes.stack.find((layer) => layer.route?.path === '/:productId/suspend' && layer.route.methods.post);
+  assert.ok(suspendRoute);
+  assert.equal(Product.schema.path('status').enumValues.includes('archived'), true);
+  assert.equal(Product.schema.path('moderationStatus').enumValues.includes('removed'), true);
 });
 
 test('saved collections extend existing favorites without duplicating saved-item records', () => {

@@ -280,12 +280,16 @@ async function submitProduct(businessId, productId) {
   return product;
 }
 
+function publicProductFilter(extra = {}) {
+  return { status: 'active', moderationStatus: 'approved', ...extra };
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function listPublicProducts({ search, categoryId, businessSlug, businessIds, businessOrder, page, limit, sort = 'newest', minPriceMinor, maxPriceMinor, condition }) {
-  const filter = { status: 'active', moderationStatus: 'approved' };
+  const filter = publicProductFilter();
   let business;
   if (businessSlug) {
     business = await Business.findOne({ slug: businessSlug, status: 'active', moderationStatus: 'approved' }).select('_id name slug');
@@ -320,14 +324,14 @@ async function listPublicProducts({ search, categoryId, businessSlug, businessId
 }
 
 async function getPublicProduct(slug) {
-  const product = await Product.findOne({ slug, status: 'active', moderationStatus: 'approved' }).populate('businessId', 'name slug status moderationStatus');
+  const product = await Product.findOne(publicProductFilter({ slug })).populate('businessId', 'name slug status moderationStatus');
   if (!product || !product.businessId || product.businessId.status !== 'active' || product.businessId.moderationStatus !== 'approved') throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
   return product;
 }
 
 async function comparePublicProducts(ids) {
   const uniqueIds = [...new Set(ids.map((id) => id.toString()))];
-  const products = await Product.find({ _id: { $in: uniqueIds }, status: 'active', moderationStatus: 'approved' }).populate('businessId', 'name slug status moderationStatus');
+  const products = await Product.find(publicProductFilter({ _id: { $in: uniqueIds } })).populate('businessId', 'name slug status moderationStatus');
   const visible = products.filter((product) => product.businessId?.status === 'active' && product.businessId?.moderationStatus === 'approved');
   if (visible.length !== uniqueIds.length) throw new AppError(404, 'PRODUCTS_NOT_AVAILABLE', 'One or more products are no longer available for comparison');
   const byId = new Map(visible.map((product) => [product._id.toString(), product]));
@@ -335,13 +339,13 @@ async function comparePublicProducts(ids) {
 }
 
 async function similarPublicProducts(slug, { limit = 8 } = {}) {
-  const source = await Product.findOne({ slug, status: 'active', moderationStatus: 'approved' }).populate('businessId', 'name slug status moderationStatus');
+  const source = await Product.findOne(publicProductFilter({ slug })).populate('businessId', 'name slug status moderationStatus');
   if (!source || !source.businessId || source.businessId.status !== 'active' || source.businessId.moderationStatus !== 'approved') throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
   const signals = [];
   if (source.categoryId) signals.push({ categoryId: source.categoryId });
   if (source.tags?.length) signals.push({ tags: { $in: source.tags } });
   if (!signals.length) return { products: [], sourceProductId: source._id.toString() };
-  const candidates = await Product.find({ _id: { $ne: source._id }, businessId: { $ne: source.businessId._id }, status: 'active', moderationStatus: 'approved', $or: signals }).sort({ ratingCount: -1, createdAt: -1 }).limit(Math.min(Math.max(Number(limit) || 8, 1), 20)).populate('businessId', 'name slug status moderationStatus');
+  const candidates = await Product.find(publicProductFilter({ _id: { $ne: source._id }, businessId: { $ne: source.businessId._id }, $or: signals })).sort({ ratingCount: -1, createdAt: -1 }).limit(Math.min(Math.max(Number(limit) || 8, 1), 20)).populate('businessId', 'name slug status moderationStatus');
   const visible = candidates.filter((product) => product.businessId?.status === 'active' && product.businessId?.moderationStatus === 'approved');
   return { sourceProductId: source._id.toString(), products: visible.map((product) => ({ ...product.toCardJSON(), business: { id: product.businessId._id.toString(), name: product.businessId.name, slug: product.businessId.slug } })) };
 }
@@ -382,4 +386,4 @@ async function reviewProduct(productId, adminId, decision, reason) {
   return product;
 }
 
-module.exports = { createProduct, updateProduct, bulkUpdateProducts, bulkCreateProductDrafts, parseCsvProductDrafts, findDuplicateProducts, duplicateProductFilter, exportBusinessProducts, submitProduct, listPublicProducts, getPublicProduct, comparePublicProducts, similarPublicProducts, listBusinessProducts, listAdminProducts, reviewProduct, normalizeVariants, uniqueProductSlug, escapeRegExp, validateCategory };
+module.exports = { createProduct, updateProduct, bulkUpdateProducts, bulkCreateProductDrafts, parseCsvProductDrafts, findDuplicateProducts, duplicateProductFilter, exportBusinessProducts, submitProduct, listPublicProducts, getPublicProduct, comparePublicProducts, similarPublicProducts, listBusinessProducts, listAdminProducts, reviewProduct, normalizeVariants, uniqueProductSlug, publicProductFilter, escapeRegExp, validateCategory };

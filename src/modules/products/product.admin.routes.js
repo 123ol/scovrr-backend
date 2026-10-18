@@ -9,5 +9,6 @@ const router = express.Router();
 router.get('/', requireAuth, requireAdminPermission(ADMIN_PERMISSIONS.PRODUCTS_READ), validate(adminProductListSchema), controller.adminList);
 router.post('/:productId/approve', requireAuth, requireAllAdminPermissions([ADMIN_PERMISSIONS.PRODUCTS_MODERATE, ADMIN_PERMISSIONS.MODERATION_RESOLVE]), validate(productReviewIdSchema), controller.adminApprove);
 router.post('/:productId/reject', requireAuth, requireAllAdminPermissions([ADMIN_PERMISSIONS.PRODUCTS_MODERATE, ADMIN_PERMISSIONS.MODERATION_RESOLVE]), validate(rejectProductSchema), controller.adminReject);
+router.post('/:productId/suspend', requireAuth, requireAllAdminPermissions([ADMIN_PERMISSIONS.PRODUCTS_MODERATE, ADMIN_PERMISSIONS.MODERATION_RESOLVE]), validate(rejectProductSchema), controller.adminSuspend);
 
 module.exports = router;

@@ -108,4 +108,15 @@ const adminReject = asyncHandler(async (req, res) => {
   return sendSuccess(res, { product: rejectedProduct.toOwnerJSON() });
 });
 
-module.exports = { create, update, bulkCreate, bulkCreateCsv, requestCsvImport, getCsvImport, bulkUpdate, submit, manageList, duplicates, exportProducts, publicList, compare, similar, publicBySlug, adjustInventory, adminList, adminApprove, adminReject };
+const adminSuspend = asyncHandler(async (req, res) => {
+  const product = await Product.findById(req.params.productId);
+  if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+  if (product.status !== 'active' || product.moderationStatus !== 'approved') throw new AppError(409, 'PRODUCT_SUSPEND_NOT_AVAILABLE', 'Only an approved live product can be suspended');
+  const item = await moderationService.createOrAttachCase({ subjectType: 'product', subjectId: product._id, businessId: product.businessId, source: 'admin', reason: 'admin_suspension', severity: 'medium' });
+  const decision = await moderationService.decideCase(item._id, req.auth.userId, 'removed', req.body.reason);
+  const suspendedProduct = decision.item ? await Product.findById(product._id) : product;
+  await recordAudit({ actorId: req.auth.userId, action: 'PRODUCT_MODERATED', targetType: 'product', targetId: suspendedProduct._id, reason: req.body.reason, before: product.toOwnerJSON(), after: suspendedProduct.toOwnerJSON(), ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null });
+  return sendSuccess(res, { product: suspendedProduct.toOwnerJSON() });
+});
+
+module.exports = { create, update, bulkCreate, bulkCreateCsv, requestCsvImport, getCsvImport, bulkUpdate, submit, manageList, duplicates, exportProducts, publicList, compare, similar, publicBySlug, adjustInventory, adminList, adminApprove, adminReject, adminSuspend };
