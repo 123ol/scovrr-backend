@@ -4,9 +4,10 @@ const { requireBusinessPermission } = require('../../middleware/business-access'
 const { validate } = require('../../common/validation/validate');
 const controller = require('./content-post.controller');
 const commentController = require('./content-post-comment.controller');
-const { createSchema, updateSchema, postIdSchema, listSchema, businessCommentCreateSchema, businessCommentListSchema } = require('./content-post.validation');
+const { createSchema, updateSchema, postIdSchema, listSchema, mineListSchema, businessCommentCreateSchema, businessCommentListSchema } = require('./content-post.validation');
 
 const router = express.Router();
+router.get('/mine/content-posts', requireAuth, validate(mineListSchema), controller.manageMineList);
 router.post('/:businessId/content-posts', requireAuth, requireBusinessPermission('content.create'), validate(createSchema), controller.create);
 router.get('/:businessId/content-posts', requireAuth, requireBusinessPermission('content.read'), validate(listSchema), controller.manageList);
 router.get('/:businessId/content-posts/:postId/comments', requireAuth, requireBusinessPermission('content.read'), validate(businessCommentListSchema), commentController.manageList);

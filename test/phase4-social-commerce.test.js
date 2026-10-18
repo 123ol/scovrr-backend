@@ -8,7 +8,7 @@ const { ModerationCase, MODERATION_SUBJECT_TYPES } = require('../src/modules/mod
 const { createEventSchema } = require('../src/modules/analytics/analytics.validation');
 const { createSchema, commentCreateSchema, businessCommentCreateSchema } = require('../src/modules/content-posts/content-post.validation');
 const { normalizeHashtags } = require('../src/modules/content-posts/content-post.service');
-const { savedListSchema } = require('../src/modules/content-posts/content-post.validation');
+const { savedListSchema, mineListSchema } = require('../src/modules/content-posts/content-post.validation');
 
 test('saved content is durable and unique per viewer and post', () => {
   const indexes = ContentPostSave.schema.indexes();
@@ -80,4 +80,11 @@ test('saved video collection uses bounded pagination', () => {
   assert.equal(result.success, true);
   assert.equal(result.data.query.page, 2);
   assert.equal(result.data.query.limit, 30);
+});
+
+test('seller content management supports membership-scoped post loading', () => {
+  const result = mineListSchema.safeParse({ body: {}, params: {}, query: { page: '1', limit: '20', status: 'active' } });
+  assert.equal(result.success, true);
+  assert.equal(result.data.query.limit, 20);
+  assert.equal(result.data.query.status, 'active');
 });

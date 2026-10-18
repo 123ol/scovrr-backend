@@ -9,6 +9,7 @@ const update = asyncHandler(async (req, res) => sendSuccess(res, { post: (await 
 const archive = asyncHandler(async (req, res) => sendSuccess(res, { post: (await service.archivePost(req.business._id, req.params.postId)).toOwnerJSON() }));
 const submit = asyncHandler(async (req, res) => sendSuccess(res, { post: (await service.submitPost(req.business._id, req.params.postId)).toOwnerJSON() }));
 const manageList = asyncHandler(async (req, res) => { const result = await service.listBusinessPosts(req.business._id, req.query); return sendSuccess(res, { ...result, posts: result.posts.map((post) => post.toOwnerJSON()) }); });
+const manageMineList = asyncHandler(async (req, res) => { const result = await service.listUserBusinessPosts(req.auth.userId, req.query); return sendSuccess(res, { ...result, posts: result.posts.map((post) => post.toOwnerJSON()) }); });
 const publicList = asyncHandler(async (req, res) => sendSuccess(res, await service.listPublicPosts(req.params.businessSlug, req.query, req.auth?.userId)));
 const adminList = asyncHandler(async (req, res) => { const result = await service.listAdminPosts(req.query); return sendSuccess(res, { ...result, posts: result.posts.map((post) => ({ ...post.toOwnerJSON(), business: post.businessId && { id: post.businessId._id.toString(), name: post.businessId.name, slug: post.businessId.slug } })) }); });
 const adminApprove = asyncHandler(async (req, res) => { const post = await service.reviewPost(req.params.postId, 'approve'); await recordAudit({ actorId: req.auth.userId, action: 'CONTENT_POST_MODERATED', targetType: 'content_post', targetId: post._id, after: post.toOwnerJSON(), ipAddress: req.ip, userAgent: req.get('user-agent'), correlationId: req.get('x-request-id') || null }); return sendSuccess(res, { post: post.toOwnerJSON() }); });
@@ -17,4 +18,4 @@ const saved = asyncHandler(async (req, res) => sendSuccess(res, await service.li
 const save = asyncHandler(async (req, res) => { await saveService.add(req.auth.userId, req.params.postId); return sendSuccess(res, { saved: true }); });
 const unsave = asyncHandler(async (req, res) => { await saveService.remove(req.auth.userId, req.params.postId); return sendSuccess(res, { saved: false }); });
 
-module.exports = { create, update, archive, submit, manageList, publicList, adminList, adminApprove, adminReject, saved, save, unsave };
+module.exports = { create, update, archive, submit, manageList, manageMineList, publicList, adminList, adminApprove, adminReject, saved, save, unsave };

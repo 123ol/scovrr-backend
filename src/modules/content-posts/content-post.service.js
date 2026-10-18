@@ -1,6 +1,8 @@
 const { AppError } = require('../../common/errors/AppError');
 const { ContentPost } = require('./content-post.model');
 const { Business } = require('../businesses/business.model');
+const { BusinessMembership } = require('../businesses/business-membership.model');
+const { expandPermissions } = require('../businesses/business-permissions');
 const { Product } = require('../products/product.model');
 const { Service } = require('../services/service.model');
 const { sanitizeCatalogueMedia } = require('../media/catalogue-media.service');
@@ -143,6 +145,17 @@ async function listBusinessPosts(businessId, query) {
   return { posts, total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
 }
 
+async function listUserBusinessPosts(userId, query) {
+  const memberships = await BusinessMembership.find({ userId, status: 'active' }).select('businessId role permissions').lean();
+  const businessIds = memberships
+    .filter((membership) => membership.role === 'owner' || expandPermissions(membership.permissions || []).has('content.read'))
+    .map((membership) => membership.businessId);
+  const filter = { businessId: { $in: businessIds }, ...(query.status ? { status: query.status } : {}) };
+  const skip = (query.page - 1) * query.limit;
+  const [posts, total] = await Promise.all([ContentPost.find(filter).sort({ createdAt: -1 }).skip(skip).limit(query.limit), ContentPost.countDocuments(filter)]);
+  return { posts, total, page: query.page, limit: query.limit, pages: Math.ceil(total / query.limit) };
+}
+
 async function listPublicPosts(businessSlug, query, viewerId) {
   const business = await Business.findOne({ slug: businessSlug, status: 'active', moderationStatus: 'approved' }).select('_id name slug');
   if (!business) throw new AppError(404, 'BUSINESS_NOT_FOUND', 'Business not found');
@@ -223,4 +236,4 @@ async function reviewPost(postId, decision, reason = null) {
   return post;
 }
 
-module.exports = { createPost, updatePost, archivePost, submitPost, listBusinessPosts, listPublicPosts, listDiscoverPosts, listSavedPosts, listAdminPosts, reviewPost, assertPostHasContent, normalizeHashtags, normalizeIds, validateTags };
+module.exports = { createPost, updatePost, archivePost, submitPost, listBusinessPosts, listUserBusinessPosts, listPublicPosts, listDiscoverPosts, listSavedPosts, listAdminPosts, reviewPost, assertPostHasContent, normalizeHashtags, normalizeIds, validateTags };

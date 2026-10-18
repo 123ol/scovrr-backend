@@ -47,4 +47,6 @@ const savedListSchema = z.object({ body: z.record(z.never()).default({}), params
 const adminListSchema = z.object({ body: z.record(z.never()).default({}), params: z.record(z.never()).default({}), query: z.object({ status: z.enum(['draft', 'pending_review', 'active', 'rejected', 'archived']).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(25) }) });
 const rejectSchema = z.object({ body: z.object({ reason: z.string().trim().min(5).max(1_000) }), params: z.object({ postId: objectId }), query: z.record(z.never()).default({}) });
 
-module.exports = { createSchema, updateSchema, postIdSchema, adminPostIdSchema, listSchema, publicListSchema, commentCreateSchema, commentListSchema, businessCommentCreateSchema, businessCommentListSchema, likeSchema, saveSchema, savedListSchema, adminListSchema, rejectSchema };
+const mineListSchema = z.object({ body: z.record(z.never()).default({}), params: z.record(z.never()).default({}), query: z.object({ status: z.enum(['draft', 'pending_review', 'active', 'rejected', 'archived']).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(25) }) });
+
+module.exports = { createSchema, updateSchema, postIdSchema, adminPostIdSchema, listSchema, mineListSchema, publicListSchema, commentCreateSchema, commentListSchema, businessCommentCreateSchema, businessCommentListSchema, likeSchema, saveSchema, savedListSchema, adminListSchema, rejectSchema };
