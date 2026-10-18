@@ -109,7 +109,7 @@ async function createPendingOrder(userId, input) {
       const product = await Product.findById(line.productId);
       const target = line.variantId ? product.variants.find((variant) => variant.variantId.toString() === line.variantId.toString()) : product;
       if (target?.inventoryTracking) {
-        const reservation = await inventoryService.reserveStock({ productId: line.productId, businessId: line.businessId, locationId: data.location._id, variantId: line.variantId, userId, quantity: line.quantity });
+        const reservation = await inventoryService.reserveStock({ productId: line.productId, businessId: line.businessId, locationId: data.location._id, variantId: line.variantId, userId, quantity: line.quantity, cleanupExpired: false });
         reservationIds.push(reservation._id);
       }
     }

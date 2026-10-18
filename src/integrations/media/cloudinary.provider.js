@@ -9,8 +9,12 @@ function resourceTypeForMime(mimeType) {
   return String(mimeType || '').startsWith('video/') ? 'video' : 'image';
 }
 
-function ensureConfigured() {
-  if (env.mediaProvider !== 'cloudinary' || !env.cloudinaryCloudName || !env.cloudinaryApiKey || !env.cloudinaryApiSecret) {
+function isConfigured(configuration = env) {
+  return configuration.mediaProvider === 'cloudinary' && Boolean(configuration.cloudinaryCloudName && configuration.cloudinaryApiKey && configuration.cloudinaryApiSecret);
+}
+
+function ensureConfigured(configuration = env) {
+  if (!isConfigured(configuration)) {
     throw new AppError(503, 'MEDIA_PROVIDER_NOT_CONFIGURED', 'Media storage is not configured for this environment');
   }
 }
@@ -116,4 +120,4 @@ async function deleteAsset(asset) {
   await cloudinaryRequest(`https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/${resourceType}/destroy`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
 }
 
-module.exports = { createUploadSession, verifyUploadedAsset, createPublicUploadSession, verifyPublicUploadedAsset, createAccessUrl, deleteAsset, SAFE_IMAGE_MIME_TYPES, SAFE_CATALOGUE_MEDIA_MIME_TYPES };
+module.exports = { createUploadSession, verifyUploadedAsset, createPublicUploadSession, verifyPublicUploadedAsset, createAccessUrl, deleteAsset, isConfigured, ensureConfigured, SAFE_IMAGE_MIME_TYPES, SAFE_CATALOGUE_MEDIA_MIME_TYPES };

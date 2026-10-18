@@ -126,8 +126,8 @@ async function releaseExpiredReservations() {
   return expired.length;
 }
 
-async function reserveStock({ productId, businessId, locationId = null, variantId, userId, quantity, orderId = null, expiresInMinutes = 15 }) {
-  await releaseExpiredReservations();
+async function reserveStock({ productId, businessId, locationId = null, variantId, userId, quantity, orderId = null, expiresInMinutes = 15, cleanupExpired = true }) {
+  if (cleanupExpired) await releaseExpiredReservations();
   const product = await Product.findOne({ _id: productId, businessId, status: 'active', moderationStatus: 'approved' });
   if (!product) throw new AppError(409, 'PRODUCT_UNAVAILABLE', 'This item is no longer available');
   if (locationId) {

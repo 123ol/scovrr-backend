@@ -5,6 +5,7 @@ const { recordDatabase } = require('../common/observability/performance-metrics'
 const { recordDatabaseUsage } = require('../common/observability/resource-metrics');
 
 let monitoringListenersInstalled = false;
+let connectionListenersInstalled = false;
 
 function databaseOperationContext(event = {}) {
   return {
@@ -33,19 +34,39 @@ function installDatabaseMonitoring() {
   monitoringListenersInstalled = true;
 }
 
+function installConnectionMonitoring() {
+  if (connectionListenersInstalled) return;
+  mongoose.connection.on('connected', () => logger.info('database.connected'));
+  mongoose.connection.on('error', (error) => logger.error('database.error', { error: { name: error.name, code: error.code, message: error.message } }));
+  mongoose.connection.on('disconnected', () => logger.warn('database.disconnected'));
+  connectionListenersInstalled = true;
+}
+
+function databaseOptions() {
+  return {
+    serverSelectionTimeoutMS: 10_000,
+    monitorCommands: env.databaseCommandMonitoringEnabled,
+    // Indexes are applied by the explicit migration scripts in production.
+    // Keeping these options configurable preserves the development/test workflow.
+    autoIndex: env.mongooseAutoIndex,
+    autoCreate: env.mongooseAutoCreate
+  };
+}
+
 async function connectDatabase() {
   if (!env.mongodbUri) {
     throw new Error('MONGODB_URI is not configured');
   }
 
-  mongoose.connection.on('connected', () => logger.info('database.connected'));
-  mongoose.connection.on('error', (error) => logger.error('database.error', { error: { name: error.name, code: error.code, message: error.message } }));
-  mongoose.connection.on('disconnected', () => logger.warn('database.disconnected'));
+  installConnectionMonitoring();
   installDatabaseMonitoring();
 
-  await mongoose.connect(env.mongodbUri, {
-    serverSelectionTimeoutMS: 10_000,
-    monitorCommands: env.databaseCommandMonitoringEnabled
+  const startedAt = process.hrtime.bigint();
+  await mongoose.connect(env.mongodbUri, databaseOptions());
+  logger.info('database.connection.ready', {
+    durationMs: Number((Number(process.hrtime.bigint() - startedAt) / 1_000_000).toFixed(2)),
+    autoIndex: env.mongooseAutoIndex,
+    autoCreate: env.mongooseAutoCreate
   });
 }
 
@@ -53,4 +74,4 @@ async function disconnectDatabase() {
   await mongoose.disconnect();
 }
 
-module.exports = { connectDatabase, disconnectDatabase, databaseOperationContext };
+module.exports = { connectDatabase, disconnectDatabase, databaseOperationContext, databaseOptions };

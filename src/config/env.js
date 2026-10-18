@@ -14,9 +14,17 @@ const toNonNegativeInt = (value, fallback) => {
 };
 
 const toBoolean = (value, fallback = false) => value === undefined ? fallback : ['1', 'true', 'yes'].includes(String(value).toLowerCase());
+const nodeEnv = process.env.NODE_ENV || 'development';
+function mongooseIndexDefaults(environment, values = {}) {
+  return {
+    autoIndex: toBoolean(values.autoIndex, environment !== 'production'),
+    autoCreate: toBoolean(values.autoCreate, environment !== 'production')
+  };
+}
+const indexDefaults = mongooseIndexDefaults(nodeEnv, { autoIndex: process.env.MONGOOSE_AUTO_INDEX, autoCreate: process.env.MONGOOSE_AUTO_CREATE });
 
 const env = Object.freeze({
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv,
   port: toPositiveInt(process.env.PORT, 4000),
   mongodbUri: process.env.MONGODB_URI || '',
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET || '',
@@ -40,6 +48,8 @@ const env = Object.freeze({
   slowRequestMs: toPositiveInt(process.env.SLOW_REQUEST_MS, 1_000),
   slowDatabaseQueryMs: toPositiveInt(process.env.SLOW_DATABASE_QUERY_MS, 500),
   databaseCommandMonitoringEnabled: toBoolean(process.env.DATABASE_COMMAND_MONITORING_ENABLED, true),
+  mongooseAutoIndex: indexDefaults.autoIndex,
+  mongooseAutoCreate: indexDefaults.autoCreate,
   expoAccessToken: process.env.EXPO_ACCESS_TOKEN || '',
   mediaProvider: process.env.MEDIA_PROVIDER || '',
   cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
@@ -111,4 +121,4 @@ function assertRuntimeConfig() {
   }
 }
 
-module.exports = { env, assertRuntimeConfig };
+module.exports = { env, assertRuntimeConfig, mongooseIndexDefaults };
