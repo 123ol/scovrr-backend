@@ -10,6 +10,7 @@ const { EvidenceUploadSession } = require('../src/modules/evidence/upload-sessio
 const { SAFE_EVIDENCE_MIME_TYPES } = require('../src/integrations/media/cloudinary.provider');
 const { Business } = require('../src/modules/businesses/business.model');
 const { validateCategory: validateProductCategory } = require('../src/modules/products/product.service');
+const { categoryTypeCompatible } = require('../src/modules/businesses/business.service');
 
 test('business slugs are readable and normalized', () => {
   assert.equal(slugify('  Glow & Go Studio  '), 'glow-go-studio');
@@ -45,6 +46,15 @@ test('business creation accepts multiple category slugs', () => {
   });
   assert.equal(result.success, true);
   assert.deepEqual(result.data.body.categorySlugs, ['fashion', 'beauty', 'hair']);
+});
+
+test('business category types map to their public business capabilities', () => {
+  assert.equal(categoryTypeCompatible('product', ['marketplace']), true);
+  assert.equal(categoryTypeCompatible('service', ['services']), true);
+  assert.equal(categoryTypeCompatible('both', ['marketplace']), true);
+  assert.equal(categoryTypeCompatible('both', ['services']), true);
+  assert.equal(categoryTypeCompatible('service', ['marketplace']), false);
+  assert.equal(categoryTypeCompatible('product', ['services']), false);
 });
 
 test('business creation requires the first shop location', () => {

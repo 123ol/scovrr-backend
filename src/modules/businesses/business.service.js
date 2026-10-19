@@ -51,6 +51,15 @@ async function resolveCategoryIds(categoryIds = [], categorySlugs = []) {
   return categoryIds || [];
 }
 
+function categoryTypeCompatible(categoryType, capabilities = []) {
+  if (categoryType === 'both') return true;
+  const capabilityForCategoryType = {
+    product: 'marketplace',
+    service: 'services'
+  }[categoryType];
+  return Boolean(capabilityForCategoryType && capabilities.includes(capabilityForCategoryType));
+}
+
 async function validateCategories(categoryIds, capabilities, categorySlugs = []) {
   categoryIds = await resolveCategoryIds(categoryIds, categorySlugs);
   if (!categoryIds?.length) return [];
@@ -58,8 +67,7 @@ async function validateCategories(categoryIds, capabilities, categorySlugs = [])
   if (categories.length !== new Set(categoryIds).size) {
     throw new AppError(400, 'INVALID_BUSINESS_CATEGORIES', 'One or more categories are unavailable');
   }
-  const types = new Set(capabilities);
-  const compatible = categories.every((category) => category.type === 'both' || types.has(category.type));
+  const compatible = categories.every((category) => categoryTypeCompatible(category.type, capabilities));
   if (!compatible) throw new AppError(400, 'CATEGORY_CAPABILITY_MISMATCH', 'Selected categories do not match the business capabilities');
   return categories.map((category) => category._id);
 }
@@ -418,4 +426,4 @@ async function changeAdminStatus(businessId, adminId, status, reason) {
   return { business, before };
 }
 
-module.exports = { createBusiness, listUserBusinesses, getPublicBusinessBySlug, getPublicStorefront, updateStorefront, updateMessaging, updateCapabilities, addLocation, listLocations, updateLocation, submitBusiness, attachVerificationEvidence, listBusinessesForAdmin, businessAdminFilter, getAdminDetail, reviewBusiness, changeAdminStatus, validateCategories, uniqueBusinessSlug };
+module.exports = { createBusiness, listUserBusinesses, getPublicBusinessBySlug, getPublicStorefront, updateStorefront, updateMessaging, updateCapabilities, addLocation, listLocations, updateLocation, submitBusiness, attachVerificationEvidence, listBusinessesForAdmin, businessAdminFilter, getAdminDetail, reviewBusiness, changeAdminStatus, validateCategories, categoryTypeCompatible, uniqueBusinessSlug };
