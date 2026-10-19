@@ -7,6 +7,7 @@ const { attachVerificationEvidenceSchema } = require('../src/modules/businesses/
 const { sessionSchema } = require('../src/modules/evidence/evidence.validation');
 const { EvidenceAsset } = require('../src/modules/evidence/evidence-asset.model');
 const { EvidenceUploadSession } = require('../src/modules/evidence/upload-session.model');
+const { SAFE_EVIDENCE_MIME_TYPES } = require('../src/integrations/media/cloudinary.provider');
 const { Business } = require('../src/modules/businesses/business.model');
 const { validateCategory: validateProductCategory } = require('../src/modules/products/product.service');
 
@@ -27,6 +28,23 @@ test('business creation requires unique capabilities', () => {
     query: {}
   });
   assert.equal(result.success, false);
+});
+
+test('business creation accepts multiple category slugs', () => {
+  const result = createBusinessSchema.safeParse({
+    body: {
+      name: 'Studio',
+      capabilities: ['marketplace'],
+      categoryIds: [],
+      categorySlugs: ['fashion', 'beauty', 'hair'],
+      operatingModel: 'home_based',
+      location: { address: { city: 'Akure', state: 'Ondo', country: 'Nigeria' }, coordinates: [5.195, 7.252] }
+    },
+    params: {},
+    query: {}
+  });
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.body.categorySlugs, ['fashion', 'beauty', 'hair']);
 });
 
 test('business creation requires the first shop location', () => {
@@ -97,4 +115,13 @@ test('verification evidence uses the existing private upload and business owners
   assert.equal(sessionSchema.safeParse({ body: { purpose: 'verification', mimeType: 'image/jpeg', subjectType: 'business', subjectId: businessId }, params: {}, query: {} }).success, true);
   assert.equal(sessionSchema.safeParse({ body: { purpose: 'verification', mimeType: 'image/jpeg', subjectType: 'conversation', subjectId: businessId }, params: {}, query: {} }).success, false);
   assert.equal(attachVerificationEvidenceSchema.safeParse({ body: { evidenceAssetIds: [businessId] }, params: { businessId }, query: {} }).success, true);
+});
+
+test('CAC verification evidence is optional but supports a labelled PDF upload', () => {
+  const businessId = '507f1f77bcf86cd799439011';
+  assert.equal(SAFE_EVIDENCE_MIME_TYPES.has('application/pdf'), true);
+  assert.equal(sessionSchema.safeParse({ body: { purpose: 'verification', documentType: 'cac', mimeType: 'application/pdf', subjectType: 'business', subjectId: businessId }, params: {}, query: {} }).success, true);
+  assert.equal(sessionSchema.safeParse({ body: { purpose: 'report', documentType: 'cac', mimeType: 'application/pdf', subjectType: 'business', subjectId: businessId }, params: {}, query: {} }).success, false);
+  assert.equal(EvidenceUploadSession.schema.path('documentType').enumValues.includes('cac'), true);
+  assert.equal(EvidenceAsset.schema.path('documentType').enumValues.includes('cac'), true);
 });

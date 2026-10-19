@@ -18,6 +18,7 @@ const { assertUserCanActById } = require('../users/user-status.service');
 
 const REPORT_CONTEXT_TYPES = new Set(['business', 'product', 'service', 'review', 'user', 'message', 'conversation', 'order', 'booking']);
 const SAFE_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const SAFE_DOCUMENT_MIME_TYPES = new Set(['application/pdf']);
 
 function assertObjectId(value, code = 'INVALID_EVIDENCE_SUBJECT') {
   if (!mongoose.isValidObjectId(value)) throw new AppError(400, code, 'The evidence subject is invalid');
@@ -25,7 +26,8 @@ function assertObjectId(value, code = 'INVALID_EVIDENCE_SUBJECT') {
 
 function evidenceTypeForMime(mimeType) {
   if (SAFE_IMAGE_MIME_TYPES.has(mimeType)) return 'image';
-  throw new AppError(400, 'UNSUPPORTED_EVIDENCE_TYPE', 'Only JPEG, PNG, and WEBP evidence is supported');
+  if (SAFE_DOCUMENT_MIME_TYPES.has(mimeType)) return 'document';
+  throw new AppError(400, 'UNSUPPORTED_EVIDENCE_TYPE', 'Only JPEG, PNG, WEBP, and PDF evidence is supported');
 }
 
 function publicId(userId, purpose) {
@@ -66,7 +68,9 @@ async function createUploadSession(userId, input) {
   await assertUserCanActById(userId);
   const mimeType = input.mimeType.toLowerCase();
   const type = evidenceTypeForMime(mimeType);
-  const maxBytes = env.evidenceImageMaxBytes;
+  const documentType = input.purpose === 'verification' ? (input.documentType || 'general') : 'general';
+  if (type === 'document' && input.purpose !== 'verification') throw new AppError(400, 'UNSUPPORTED_EVIDENCE_TYPE', 'PDF evidence is only supported for business verification');
+  const maxBytes = type === 'document' ? env.evidenceDocumentMaxBytes : env.evidenceImageMaxBytes;
   let contextSubjectType = null;
   let contextSubjectId = null;
   let disputeId = null;
@@ -114,7 +118,7 @@ async function createUploadSession(userId, input) {
   const provider = getMediaProvider();
   const expectedProviderAssetId = publicId(userId, input.purpose);
   const sessionData = await provider.createUploadSession({ publicId: expectedProviderAssetId, mimeType, maxBytes });
-  const session = await EvidenceUploadSession.create({ userId, purpose: input.purpose, contextSubjectType, contextSubjectId, disputeId, provider: sessionData.provider, expectedProviderAssetId, mimeType, maxBytes, expiresAt: new Date(Date.now() + env.evidenceUploadSessionTtlSeconds * 1_000) });
+  const session = await EvidenceUploadSession.create({ userId, purpose: input.purpose, documentType, contextSubjectType, contextSubjectId, disputeId, provider: sessionData.provider, expectedProviderAssetId, mimeType, maxBytes, expiresAt: new Date(Date.now() + env.evidenceUploadSessionTtlSeconds * 1_000) });
   return { session, upload: sessionData, type };
 }
 
@@ -140,7 +144,7 @@ async function completeUploadSession(userId, sessionId, input) {
     try { await provider.deleteAsset({ providerAssetId: session.expectedProviderAssetId }); } catch (_cleanupError) { /* provider cleanup is best effort; the session TTL still closes the reference */ }
     throw error;
   }
-  const asset = await EvidenceAsset.create({ purpose: session.purpose, contextSubjectType: session.contextSubjectType, contextSubjectId: session.contextSubjectId, disputeId: session.disputeId, sessionId: session._id, uploadedBy: userId, provider: verified.provider, providerAssetId: verified.providerAssetId, storageKey: verified.storageKey, version: verified.version, type: evidenceTypeForMime(verified.mimeType), mimeType: verified.mimeType, format: verified.format, sizeBytes: verified.bytes, originalName: input.originalName || null, alt: input.alt || null, visibility: session.purpose === 'verification' ? 'admin_only' : 'parties', status: 'uploaded' });
+  const asset = await EvidenceAsset.create({ purpose: session.purpose, documentType: session.documentType || 'general', contextSubjectType: session.contextSubjectType, contextSubjectId: session.contextSubjectId, disputeId: session.disputeId, sessionId: session._id, uploadedBy: userId, provider: verified.provider, providerAssetId: verified.providerAssetId, storageKey: verified.storageKey, version: verified.version, type: evidenceTypeForMime(verified.mimeType), mimeType: verified.mimeType, format: verified.format, sizeBytes: verified.bytes, originalName: input.originalName || null, alt: input.alt || null, visibility: session.purpose === 'verification' ? 'admin_only' : 'parties', status: 'uploaded' });
   session.status = 'uploaded'; session.evidenceId = asset._id; await session.save();
   return asset;
 }

@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const evidenceSnapshotSchema = new mongoose.Schema({
   evidenceId: { type: mongoose.Schema.Types.ObjectId, ref: 'EvidenceAsset', default: null },
+  documentType: { type: String, enum: ['general', 'cac'], default: 'general' },
   storageKey: { type: String, trim: true, maxlength: 500, default: null },
   type: { type: String, enum: ['image', 'document'], default: 'image' },
   mimeType: { type: String, trim: true, maxlength: 120, default: null },
@@ -14,6 +15,7 @@ const evidenceSnapshotSchema = new mongoose.Schema({
 function evidenceSnapshot(asset) {
   return {
     evidenceId: asset._id,
+    documentType: asset.documentType || 'general',
     storageKey: asset.storageKey,
     type: asset.type,
     mimeType: asset.mimeType,

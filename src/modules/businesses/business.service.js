@@ -16,6 +16,7 @@ const { User } = require('../users/user.model');
 const { Follow } = require('../follows/follow.model');
 const { UserFollow } = require('../follows/user-follow.model');
 const { DEFAULT_SELLER_CATEGORIES } = require('../categories/default-categories');
+const { EvidenceAsset } = require('../evidence/evidence-asset.model');
 
 async function uniqueBusinessSlug(name) {
   const base = slugify(name);
@@ -353,13 +354,14 @@ async function listBusinessesForAdmin({ status, search, operatingModel, verifica
 async function getAdminDetail(businessId) {
   const business = await Business.findById(businessId);
   if (!business) throw new AppError(404, 'BUSINESS_NOT_FOUND', 'Business not found');
-  const [locations, members, productCount, serviceCount] = await Promise.all([
+  const [locations, members, productCount, serviceCount, verificationEvidence] = await Promise.all([
     BusinessLocation.find({ businessId }).sort({ primary: -1, createdAt: 1 }),
     BusinessMembership.find({ businessId }).sort({ role: 1, createdAt: 1 }).populate('userId', 'firstName lastName email status'),
     Product.countDocuments({ businessId }),
-    Service.countDocuments({ businessId })
+    Service.countDocuments({ businessId }),
+    EvidenceAsset.find({ _id: { $in: business.verification?.evidenceAssetIds || [] } }).select('_id documentType type mimeType originalName sizeBytes status createdAt').sort({ createdAt: 1 }).lean()
   ]);
-  return { business, locations, members, counts: { products: productCount, services: serviceCount } };
+  return { business, locations, members, counts: { products: productCount, services: serviceCount }, verificationEvidence };
 }
 
 async function reviewBusiness(businessId, adminId, decision, details = {}) {

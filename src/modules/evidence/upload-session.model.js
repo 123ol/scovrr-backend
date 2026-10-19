@@ -5,6 +5,7 @@ const UPLOAD_SESSION_STATUSES = ['pending', 'uploaded', 'consumed', 'expired', '
 const uploadSessionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   purpose: { type: String, enum: ['report', 'dispute', 'message', 'verification', 'delivery'], required: true },
+  documentType: { type: String, enum: ['general', 'cac'], default: 'general' },
   contextSubjectType: { type: String, default: null },
   contextSubjectId: { type: mongoose.Schema.Types.ObjectId, default: null },
   disputeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Dispute', default: null },

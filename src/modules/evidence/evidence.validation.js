@@ -1,11 +1,13 @@
 const { z } = require('zod');
 
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, 'Must be a valid identifier');
-const imageMime = z.enum(['image/jpeg', 'image/png', 'image/webp']);
+const evidenceMime = z.enum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+const verificationDocumentType = z.enum(['general', 'cac']).default('general');
 const sessionSchema = z.object({
   body: z.object({
     purpose: z.enum(['report', 'dispute', 'message', 'verification', 'delivery']),
-    mimeType: imageMime,
+    mimeType: evidenceMime,
+    documentType: verificationDocumentType,
     subjectType: z.enum(['business', 'product', 'service', 'review', 'user', 'message', 'conversation', 'order', 'booking', 'delivery']).optional(),
     subjectId: objectId.optional(),
     disputeId: objectId.optional()
@@ -15,6 +17,9 @@ const sessionSchema = z.object({
     if (body.purpose === 'message' && (body.subjectType !== 'conversation' || !body.subjectId)) context.addIssue({ code: z.ZodIssueCode.custom, path: ['subjectId'], message: 'A conversation is required for message media' });
     if (body.purpose === 'verification' && (body.subjectType !== 'business' || !body.subjectId)) context.addIssue({ code: z.ZodIssueCode.custom, path: ['subjectId'], message: 'A business is required for verification evidence' });
     if (body.purpose === 'delivery' && (body.subjectType !== 'delivery' || !body.subjectId)) context.addIssue({ code: z.ZodIssueCode.custom, path: ['subjectId'], message: 'A delivery is required for delivery evidence' });
+    if (body.purpose !== 'verification' && body.mimeType === 'application/pdf') context.addIssue({ code: z.ZodIssueCode.custom, path: ['mimeType'], message: 'PDF evidence is only supported for business verification' });
+    if (body.purpose !== 'verification' && body.documentType !== 'general') context.addIssue({ code: z.ZodIssueCode.custom, path: ['documentType'], message: 'Document labels are only supported for business verification' });
+    if (body.purpose === 'verification' && body.documentType === 'cac' && body.mimeType !== 'application/pdf' && !body.mimeType.startsWith('image/')) context.addIssue({ code: z.ZodIssueCode.custom, path: ['mimeType'], message: 'CAC evidence must be a PDF or image' });
   }),
   params: z.record(z.never()).default({}),
   query: z.record(z.never()).default({})

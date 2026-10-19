@@ -71,7 +71,7 @@ const adminList = asyncHandler(async (req, res) => {
 });
 const adminDetail = asyncHandler(async (req, res) => {
   const detail = await businessService.getAdminDetail(req.params.businessId);
-  return sendSuccess(res, { business: detail.business.toOwnerJSON(), locations: detail.locations.map((location) => location.toJSONSafe(true)), members: detail.members.map((member) => ({ ...member.toJSONSafe(), user: member.userId ? { id: member.userId._id.toString(), firstName: member.userId.firstName, lastName: member.userId.lastName, email: member.userId.email, status: member.userId.status } : null })), counts: detail.counts });
+  return sendSuccess(res, { business: detail.business.toOwnerJSON(), locations: detail.locations.map((location) => location.toJSONSafe(true)), members: detail.members.map((member) => ({ ...member.toJSONSafe(), user: member.userId ? { id: member.userId._id.toString(), firstName: member.userId.firstName, lastName: member.userId.lastName, email: member.userId.email, status: member.userId.status } : null })), counts: detail.counts, verificationEvidence: detail.verificationEvidence.map((item) => ({ id: item._id.toString(), documentType: item.documentType || 'general', type: item.type, mimeType: item.mimeType, originalName: item.originalName || null, sizeBytes: item.sizeBytes, status: item.status, createdAt: item.createdAt })) });
 });
 const adminRisk = asyncHandler(async (req, res) => sendSuccess(res, await businessRiskService.listRiskSignals(req.query)));
 

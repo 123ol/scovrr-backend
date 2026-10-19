@@ -3,9 +3,11 @@ const mongoose = require('mongoose');
 const EVIDENCE_PURPOSES = ['report', 'dispute', 'message', 'verification', 'delivery'];
 const EVIDENCE_STATUSES = ['uploaded', 'attached', 'hidden', 'revoked'];
 const EVIDENCE_VISIBILITIES = ['parties', 'admin_only', 'submitter_and_admin'];
+const EVIDENCE_DOCUMENT_TYPES = ['general', 'cac'];
 
 const evidenceAssetSchema = new mongoose.Schema({
   purpose: { type: String, enum: EVIDENCE_PURPOSES, required: true, index: true },
+  documentType: { type: String, enum: EVIDENCE_DOCUMENT_TYPES, default: 'general' },
   contextSubjectType: { type: String, default: null },
   contextSubjectId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
   disputeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Dispute', default: null, index: true },
@@ -38,6 +40,7 @@ evidenceAssetSchema.methods.toSafeJSON = function toSafeJSON() {
   return {
     id: this._id.toString(),
     purpose: this.purpose,
+    documentType: this.documentType || 'general',
     subjectType: this.subjectType,
     subjectId: this.subjectId?.toString() || null,
     uploadedBy: this.uploadedBy.toString(),
@@ -57,4 +60,4 @@ evidenceAssetSchema.methods.toSafeJSON = function toSafeJSON() {
 
 const EvidenceAsset = mongoose.model('EvidenceAsset', evidenceAssetSchema);
 
-module.exports = { EvidenceAsset, EVIDENCE_PURPOSES, EVIDENCE_STATUSES, EVIDENCE_VISIBILITIES };
+module.exports = { EvidenceAsset, EVIDENCE_PURPOSES, EVIDENCE_STATUSES, EVIDENCE_VISIBILITIES, EVIDENCE_DOCUMENT_TYPES };

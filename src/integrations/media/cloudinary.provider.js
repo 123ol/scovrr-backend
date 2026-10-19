@@ -3,9 +3,11 @@ const { env } = require('../../config/env');
 const { AppError } = require('../../common/errors/AppError');
 
 const SAFE_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const SAFE_EVIDENCE_MIME_TYPES = new Set([...SAFE_IMAGE_MIME_TYPES, 'application/pdf']);
 const SAFE_CATALOGUE_MEDIA_MIME_TYPES = new Set([...SAFE_IMAGE_MIME_TYPES, 'video/mp4', 'video/quicktime', 'video/webm']);
 
 function resourceTypeForMime(mimeType) {
+  if (mimeType === 'application/pdf') return 'raw';
   return String(mimeType || '').startsWith('video/') ? 'video' : 'image';
 }
 
@@ -38,12 +40,13 @@ function providerAssetId(publicId) {
 
 async function createUploadSession({ publicId, mimeType, maxBytes }) {
   ensureConfigured();
-  if (!SAFE_IMAGE_MIME_TYPES.has(mimeType)) throw new AppError(400, 'UNSUPPORTED_EVIDENCE_TYPE', 'Only JPEG, PNG, and WEBP evidence is supported');
+  if (!SAFE_EVIDENCE_MIME_TYPES.has(mimeType)) throw new AppError(400, 'UNSUPPORTED_EVIDENCE_TYPE', 'Only JPEG, PNG, WEBP, and PDF evidence is supported');
   const timestamp = Math.floor(Date.now() / 1_000);
   const params = { public_id: publicId, timestamp, type: 'authenticated' };
+  const resourceType = resourceTypeForMime(mimeType);
   return {
     provider: 'cloudinary',
-    uploadUrl: `https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/image/upload`,
+    uploadUrl: `https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/${resourceType}/upload`,
     fields: { ...params, api_key: env.cloudinaryApiKey, signature: signParams(params) },
     maxBytes,
     expiresAt: new Date((timestamp + 900) * 1_000)
@@ -77,14 +80,15 @@ async function cloudinaryRequest(url, options = {}) {
 async function verifyUploadedAsset({ publicId, expectedPublicId, mimeType, maxBytes }) {
   ensureConfigured();
   if (publicId !== expectedPublicId) throw new AppError(400, 'UPLOAD_ASSET_MISMATCH', 'The uploaded object does not belong to this upload session');
-  if (!SAFE_IMAGE_MIME_TYPES.has(mimeType)) throw new AppError(400, 'UNSUPPORTED_EVIDENCE_TYPE', 'Only JPEG, PNG, and WEBP evidence is supported');
-  const endpoint = `https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/resources/image/authenticated/${encodeURIComponent(publicId)}`;
+  if (!SAFE_EVIDENCE_MIME_TYPES.has(mimeType)) throw new AppError(400, 'UNSUPPORTED_EVIDENCE_TYPE', 'Only JPEG, PNG, WEBP, and PDF evidence is supported');
+  const resourceType = resourceTypeForMime(mimeType);
+  const endpoint = `https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/resources/${resourceType}/authenticated/${encodeURIComponent(publicId)}`;
   const metadata = await cloudinaryRequest(endpoint, { headers: { Authorization: `Basic ${Buffer.from(`${env.cloudinaryApiKey}:${env.cloudinaryApiSecret}`).toString('base64')}` } });
-  if (metadata.public_id !== expectedPublicId || metadata.resource_type !== 'image' || metadata.type !== 'authenticated') throw new AppError(400, 'UPLOAD_ASSET_UNVERIFIED', 'The media provider metadata could not be verified');
+  if (metadata.public_id !== expectedPublicId || metadata.resource_type !== resourceType || metadata.type !== 'authenticated') throw new AppError(400, 'UPLOAD_ASSET_UNVERIFIED', 'The media provider metadata could not be verified');
   if (!Number.isInteger(metadata.bytes) || metadata.bytes < 1 || metadata.bytes > maxBytes) throw new AppError(400, 'EVIDENCE_SIZE_INVALID', 'The uploaded evidence exceeds the configured size limit');
-  const formatMime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }[String(metadata.format || '').toLowerCase()];
+  const formatMime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', pdf: 'application/pdf' }[String(metadata.format || '').toLowerCase()];
   if (!formatMime || formatMime !== mimeType) throw new AppError(400, 'EVIDENCE_MIME_MISMATCH', 'The uploaded file type does not match its declared type');
-  return { provider: 'cloudinary', providerAssetId: providerAssetId(metadata.public_id), storageKey: `cloudinary:authenticated:${metadata.public_id}`, publicId: metadata.public_id, version: metadata.version || null, format: metadata.format, mimeType: formatMime, bytes: metadata.bytes };
+  return { provider: 'cloudinary', providerAssetId: providerAssetId(metadata.public_id), storageKey: `cloudinary:${resourceType}:authenticated:${metadata.public_id}`, publicId: metadata.public_id, version: metadata.version || null, format: metadata.format, mimeType: formatMime, resourceType, bytes: metadata.bytes };
 }
 
 async function verifyPublicUploadedAsset({ publicId, expectedPublicId, mimeType, maxBytes }) {
@@ -108,7 +112,8 @@ function createAccessUrl(asset, ttlSeconds) {
   const expiresAt = timestamp + ttlSeconds;
   const params = { public_id: asset.providerAssetId, format: asset.format, type: 'authenticated', expires_at: expiresAt, timestamp };
   const query = new URLSearchParams({ ...params, api_key: env.cloudinaryApiKey, signature: signParams(params) });
-  return { url: `https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/image/download?${query.toString()}`, expiresAt: new Date(expiresAt * 1_000) };
+  const resourceType = resourceTypeForMime(asset.mimeType);
+  return { url: `https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/${resourceType}/download?${query.toString()}`, expiresAt: new Date(expiresAt * 1_000) };
 }
 
 async function deleteAsset(asset) {
@@ -120,4 +125,4 @@ async function deleteAsset(asset) {
   await cloudinaryRequest(`https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/${resourceType}/destroy`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
 }
 
-module.exports = { createUploadSession, verifyUploadedAsset, createPublicUploadSession, verifyPublicUploadedAsset, createAccessUrl, deleteAsset, isConfigured, ensureConfigured, SAFE_IMAGE_MIME_TYPES, SAFE_CATALOGUE_MEDIA_MIME_TYPES };
+module.exports = { createUploadSession, verifyUploadedAsset, createPublicUploadSession, verifyPublicUploadedAsset, createAccessUrl, deleteAsset, isConfigured, ensureConfigured, SAFE_IMAGE_MIME_TYPES, SAFE_EVIDENCE_MIME_TYPES, SAFE_CATALOGUE_MEDIA_MIME_TYPES };
