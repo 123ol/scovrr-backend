@@ -234,6 +234,7 @@ async function createBooking(userId, input) {
     const booking = await Booking.create({ _id: bookingId, bookingNumber: bookingNumber(), clientRequestId: input.clientRequestId, customerId: userId, businessId: context.service.businessId._id, serviceId: context.service._id, serviceSnapshot: context.snapshot, serviceItems: items.map((item) => item.snapshot), totalDurationMinutes: context.totalDurationMinutes || context.snapshot.durationMinutes, staffUserId: context.staffUserId, locationType: input.locationType, locationId: context.location?._id || null, addressSnapshot: addressSnapshot(context.address), startAt, endAt: context.endAt, timezone: context.rule.timezone, customerNotes: input.customerNotes || '', priceMinor, depositMinor, discountMinor: pricing.discountMinor, couponCode: input.couponCode || null, pricingSnapshot: pricing, currency: context.snapshot.currency, requestType: input.requestType, paymentStatus: 'not_initialized', status: input.requestType === 'instant' ? 'pending_payment' : 'requested', holdExpiresAt, timeline: [{ status: input.requestType === 'instant' ? 'pending_payment' : 'requested', actorId: userId, note: input.requestType === 'instant' ? 'Appointment reserved pending payment initialization.' : 'Booking request submitted to the business.' }] });
     for (const plan of pricing.redemptionPlans || []) await promotionService.reservePromotion({ promotionId: plan.promotionId, couponCodeId: plan.couponCodeId, discountMinor: plan.discountMinor, bookingId: booking._id, customerId: userId, idempotencyKey: `booking:${booking._id}:promotion:${plan.promotionId}` });
     await require('../analytics/domain-event.service').queue('BOOKING_CREATED', { userId, actorType: 'user', businessId: booking.businessId, locationId: booking.locationId, entityType: 'booking', entityId: booking._id, metadata: { bookingId: booking._id.toString(), serviceId: booking.serviceId.toString(), serviceIds: items.map((item) => item.service._id.toString()), amountMinor: booking.depositMinor, currency: booking.currency, requestType: booking.requestType } }, `booking:${booking._id}:created`);
+    if (booking.requestType !== 'instant') await require('../email/email.events').sendBookingEmail(booking, 'booking_confirmation', 'requested', { details: 'Your booking request was sent to the business.' });
     return booking;
   } catch (error) {
     await releaseBookingLocks(bookingId);
@@ -313,6 +314,9 @@ async function transitionBusinessBooking(businessId, bookingId, actorId, action,
   if (['rejected', 'cancelled_by_business', 'no_show'].includes(target)) await waitlistService.offerForReleasedBooking(booking);
   const eventName = target === 'confirmed' ? 'BOOKING_CONFIRMED' : target === 'completed' ? 'BOOKING_COMPLETED' : ['cancelled_by_business', 'no_show', 'rejected'].includes(target) ? 'BOOKING_CANCELLED' : null;
   if (eventName) await require('../analytics/domain-event.service').queue(eventName, { actorId, actorType: 'user', businessId, locationId: booking.locationId, entityType: 'booking', entityId: booking._id, metadata: { bookingId: booking._id.toString(), serviceId: booking.serviceId.toString(), amountMinor: booking.depositMinor, currency: booking.currency, status: target, reason: reason || null } }, `booking:${booking._id}:${eventName.toLowerCase()}`);
+  const bookingEmailEvents = require('../email/email.events');
+  if (target === 'confirmed') await bookingEmailEvents.sendBookingEmail(booking, 'booking_confirmation', 'confirmed');
+  if (['cancelled_by_business', 'rejected', 'no_show'].includes(target)) await bookingEmailEvents.sendBookingEmail(booking, 'booking_cancelled', target, { details: reason || 'This booking is no longer active.' });
   if (target === 'completed') await notificationService.createNotification({ userId: booking.customerId, type: 'booking_follow_up', title: 'How was your appointment?', body: `Your ${booking.serviceSnapshot.serviceName} appointment is complete. Share feedback or book it again when you are ready.`, data: { bookingId: booking._id.toString(), serviceId: booking.serviceId.toString() }, deduplicationKey: bookingFollowUpDeduplicationKey(booking._id) });
   return booking;
 }
@@ -324,7 +328,7 @@ async function cancelCustomerBooking(userId, bookingId, reason) {
   const cancellationWindowHours = Math.max(...snapshots.map((snapshot) => snapshot.cancellationWindowHours || 0));
   if (booking.startAt.getTime() - Date.now() < cancellationWindowHours * 60 * 60_000) throw new AppError(409, 'BOOKING_CANCELLATION_WINDOW_PASSED', 'This booking is inside the cancellation window');
   booking.status = 'cancelled_by_customer'; booking.cancellation = { reason: reason || 'Customer cancelled booking', cancelledBy: userId, cancelledAt: new Date() }; booking.timeline.push({ status: booking.status, actorId: userId, note: booking.cancellation.reason });
-  await releaseBookingLocks(booking._id); await promotionService.releasePromotionForBooking(booking._id); await booking.save(); await waitlistService.offerForReleasedBooking(booking); await require('../analytics/domain-event.service').queue('BOOKING_CANCELLED', { userId, actorType: 'user', businessId: booking.businessId, locationId: booking.locationId, entityType: 'booking', entityId: booking._id, metadata: { bookingId: booking._id.toString(), amountMinor: booking.depositMinor, currency: booking.currency, reason: booking.cancellation.reason } }, `booking:${booking._id}:cancelled`); return booking;
+  await releaseBookingLocks(booking._id); await promotionService.releasePromotionForBooking(booking._id); await booking.save(); await waitlistService.offerForReleasedBooking(booking); await require('../analytics/domain-event.service').queue('BOOKING_CANCELLED', { userId, actorType: 'user', businessId: booking.businessId, locationId: booking.locationId, entityType: 'booking', entityId: booking._id, metadata: { bookingId: booking._id.toString(), amountMinor: booking.depositMinor, currency: booking.currency, reason: booking.cancellation.reason } }, `booking:${booking._id}:cancelled`); await require('../email/email.events').sendBookingEmail(booking, 'booking_cancelled', 'customer-cancelled', { details: booking.cancellation.reason }); return booking;
 }
 
 function bookingFollowUpDeduplicationKey(bookingId) {
@@ -376,6 +380,7 @@ async function processBookingReminders(now = new Date()) {
         data,
         deduplicationKey: `booking-reminder:${booking._id}:${window.key}:customer`
       });
+      await require('../email/email.events').sendBookingEmail(booking, 'booking_reminder', window.key, { details: `${booking.serviceSnapshot.serviceName} starts ${window.key === '1h' ? 'in about an hour' : 'tomorrow'}.` });
       if (customerNotification) sent += 1;
       const owner = await BusinessMembership.findOne({ businessId: booking.businessId, role: 'owner', status: 'active' }).select('userId');
       if (owner) {

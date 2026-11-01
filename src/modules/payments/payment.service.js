@@ -280,6 +280,21 @@ async function settleSuccessfulPayment(payment, providerData = {}) {
     await createNotification({ deduplicationKey: `payment:${payment._id}:confirmed`, userId: payment.customerId, type: 'payment_confirmed', title: 'Payment confirmed', body: `Your ${payment.type} payment has been verified.`, data: { paymentId: payment._id.toString(), orderId: payment.orderId?.toString() || null, bookingId: payment.bookingId?.toString() || null, campaignId: payment.campaignId?.toString() || null } });
     payment.settlementStatus = 'completed';
     await payment.save();
+    try {
+      if (payment.orderId) {
+        const settledOrder = await Order.findById(payment.orderId);
+        if (settledOrder) {
+          const emailEvents = require('../email/email.events');
+          await emailEvents.sendOrderEmail(settledOrder, 'order_confirmation', 'confirmation');
+          await emailEvents.sendOrderEmail(settledOrder, 'payment_receipt', 'receipt', { details: `Your payment of ${settledOrder.currency} ${(settledOrder.totalMinor / 100).toLocaleString()} was confirmed.` });
+        }
+      } else if (payment.bookingId) {
+        const settledBooking = await Booking.findById(payment.bookingId);
+        if (settledBooking) await require('../email/email.events').sendBookingEmail(settledBooking, 'booking_confirmation', 'confirmation');
+      }
+    } catch (error) {
+      logger.error('payment.email_event.failed', { paymentId: payment._id.toString(), error: { name: error.name, code: error.code, message: error.message } });
+    }
     return payment;
   } catch (error) {
     await Payment.updateOne({ _id: payment._id, settlementStatus: 'processing' }, { $set: { settlementStatus: 'failed', failureReason: error.message } });

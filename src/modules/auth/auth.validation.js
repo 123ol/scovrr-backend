@@ -50,6 +50,22 @@ const loginSchema = z.object({
   query: z.record(z.never()).default({})
 });
 
+const emailVerificationSchema = z.object({
+  body: z.object({ challengeId: z.string().regex(/^[a-f\d]{24}$/i), email, code: z.string().regex(/^\d{6}$/) }).strict(),
+  params: z.record(z.never()).default({}),
+  query: z.record(z.never()).default({})
+});
+
+const emailVerificationResendSchema = z.object({
+  body: z.object({ email }).strict(),
+  params: z.record(z.never()).default({}),
+  query: z.record(z.never()).default({})
+});
+
+const passwordResetRequestSchema = z.object({ body: z.object({ email }).strict(), params: z.record(z.never()).default({}), query: z.record(z.never()).default({}) });
+const passwordResetConfirmSchema = z.object({ body: z.object({ token: z.string().min(32).max(256), password }).strict(), params: z.record(z.never()).default({}), query: z.record(z.never()).default({}) });
+const passwordChangeSchema = z.object({ body: z.object({ currentPassword: password, password }).strict(), params: z.record(z.never()).default({}), query: z.record(z.never()).default({}) });
+
 const refreshSchema = z.object({
   body: z.object({ refreshToken: z.string().min(32).max(256) }),
   params: z.record(z.never()).default({}),
@@ -132,4 +148,4 @@ const deletionRequestListSchema = z.object({
 });
 const lifecyclePolicySchema = z.object({ body: z.record(z.never()).default({}), params: z.record(z.never()).default({}), query: z.record(z.never()).default({}) });
 
-module.exports = { registerSchema, loginSchema, refreshSchema, profileUpdateSchema, preferenceUpdateSchema, privacyConsentSchema, privacyConsentReadSchema, deactivateSchema, sessionIdSchema, sessionsSchema, exportJobIdSchema, deletionRequestIdSchema, deletionRequestSchema, deletionRequestReviewSchema, deletionRequestListSchema, lifecyclePolicySchema };
+module.exports = { registerSchema, loginSchema, emailVerificationSchema, emailVerificationResendSchema, passwordResetRequestSchema, passwordResetConfirmSchema, passwordChangeSchema, refreshSchema, profileUpdateSchema, preferenceUpdateSchema, privacyConsentSchema, privacyConsentReadSchema, deactivateSchema, sessionIdSchema, sessionsSchema, exportJobIdSchema, deletionRequestIdSchema, deletionRequestSchema, deletionRequestReviewSchema, deletionRequestListSchema, lifecyclePolicySchema };

@@ -21,6 +21,20 @@ const login = asyncHandler(async (req, res) => {
   return sendSuccess(res, session);
 });
 
+const verifyEmail = asyncHandler(async (req, res) => {
+  const session = await authService.completeEmailVerification(req.body, requestMetadata(req));
+  return sendSuccess(res, session);
+});
+
+const resendEmailVerification = asyncHandler(async (req, res) => {
+  const result = await require('./email-verification.service').resendChallenge(req.body.email, { requestIp: req.ip });
+  return sendSuccess(res, result);
+});
+
+const requestPasswordReset = asyncHandler(async (req, res) => sendSuccess(res, await authService.requestPasswordReset(req.body.email, requestMetadata(req))));
+const resetPassword = asyncHandler(async (req, res) => sendSuccess(res, await authService.resetPassword(req.body.token, req.body.password)));
+const changePassword = asyncHandler(async (req, res) => sendSuccess(res, { user: (await authService.changePassword(req.auth.userId, req.body.currentPassword, req.body.password)).toSafeJSON() }));
+
 const refresh = asyncHandler(async (req, res) => {
   const session = await authService.refresh(req.body.refreshToken, requestMetadata(req));
   return sendSuccess(res, session);
@@ -48,4 +62,4 @@ const sessions = asyncHandler(async (req, res) => sendSuccess(res, { sessions: a
 const revokeSession = asyncHandler(async (req, res) => { await authService.revokeSession(req.auth.userId, req.params.sessionId); return res.status(204).send(); });
 const revokeOtherSessions = asyncHandler(async (req, res) => sendSuccess(res, { revoked: await authService.revokeOtherSessions(req.auth.userId, req.auth.sessionId) }));
 
-module.exports = { register, login, refresh, logout, me, updateProfile, updatePreferences, recordPrivacyConsent, getPrivacyConsent, accountLifecyclePolicy, getDeletionRequest, requestDeletion, cancelDeletion, exportData, requestExport, getExport, deactivate, sessions, revokeSession, revokeOtherSessions };
+module.exports = { register, login, verifyEmail, resendEmailVerification, requestPasswordReset, resetPassword, changePassword, refresh, logout, me, updateProfile, updatePreferences, recordPrivacyConsent, getPrivacyConsent, accountLifecyclePolicy, getDeletionRequest, requestDeletion, cancelDeletion, exportData, requestExport, getExport, deactivate, sessions, revokeSession, revokeOtherSessions };

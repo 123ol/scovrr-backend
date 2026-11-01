@@ -150,6 +150,7 @@ async function executePayout(payoutId) {
     payout.status = error.code === 'PAYOUT_PROVIDER_NOT_CONFIGURED' ? 'eligible' : 'failed';
     payout.failureReason = error.message;
     await payout.save();
+    if (payout.status === 'failed') await require('../email/email.events').sendBusinessOwnerEmail({ businessId: payout.businessId, templateKey: 'payout_failed', idempotencyKey: `payout-email:${payout._id}:failed:${payout.attemptCount}`, data: { details: 'Your payout could not be completed. Please review your payout settings or contact SCOVRR support.' }, metadata: { payoutId: payout._id.toString() } });
     throw error;
   }
 }
@@ -181,6 +182,7 @@ async function markPayoutPaid(payout) {
   const updated = await Payout.findOneAndUpdate({ _id: payout._id, status: { $ne: 'paid' } }, { $set: { status: 'paid', paidAt: new Date(), failureReason: null } }, { new: true });
   if (updated) {
     try { await recordAudit({ actorType: 'system', action: 'PAYOUT_PAID', targetType: 'payout', targetId: updated._id, businessId: updated.businessId, after: updated.toSafeJSON() }); } catch (error) { logger.error('payout.audit.failed', { error: { name: error.name, code: error.code, message: error.message } }); }
+    await require('../email/email.events').sendBusinessOwnerEmail({ businessId: updated.businessId, templateKey: 'payout_successful', idempotencyKey: `payout-email:${updated._id}:paid`, data: { details: `Your payout of ${updated.currency} ${(updated.amountMinor / 100).toLocaleString()} was successful.` }, metadata: { payoutId: updated._id.toString() } });
   }
   return updated || Payout.findById(payout._id);
 }
@@ -204,6 +206,7 @@ async function verifyPayout(payoutId) {
   else payout.status = 'processing';
   payout.failureReason = ['failed', 'reversed'].includes(result.status) ? `Provider transfer status: ${result.status}` : null;
   await payout.save();
+  if (payout.status === 'failed' || payout.status === 'reversed') await require('../email/email.events').sendBusinessOwnerEmail({ businessId: payout.businessId, templateKey: 'payout_failed', idempotencyKey: `payout-email:${payout._id}:${payout.status}`, data: { details: `Your payout could not be completed because the provider reported a ${result.status} status.` }, metadata: { payoutId: payout._id.toString() } });
   return payout;
 }
 

@@ -18,6 +18,7 @@ const { AccountExportJob } = require('./account-export-job.model');
 const { AccountDeletionRequest } = require('./account-deletion-request.model');
 const { enqueueJob } = require('../../jobs/job.service');
 const { logger } = require('../../common/observability/logger');
+const { PasswordResetToken } = require('./password-reset-token.model');
 
 const BCRYPT_ROUNDS = 12;
 
@@ -86,9 +87,18 @@ async function register(input, metadata) {
     phone: input.phone || undefined,
     accountType: input.accountType || 'buyer',
     location: input.location || undefined,
-    passwordHash
+    passwordHash,
+    ...(env.emailEnabled ? { status: 'pending_verification' } : {})
   });
   await require('../analytics/domain-event.service').queue('USER_REGISTERED', { userId: user._id, actorType: 'user', entityType: 'user', entityId: user._id, metadata: { source: 'API' } }, `user:${user._id}:registered`);
+  if (env.emailEnabled) {
+    const challenge = await require('./email-verification.service').createChallenge(user, { requestIp: metadata?.ipAddress });
+    return {
+      verificationRequired: true,
+      user: user.toSafeJSON(),
+      verification: { challengeId: challenge._id.toString(), email: user.email, expiresAt: challenge.expiresAt, resendAvailableAt: challenge.resendAvailableAt }
+    };
+  }
   const tokens = await createSession(user, metadata);
   return publicSession(user, tokens);
 }
@@ -98,6 +108,9 @@ async function login(input, metadata) {
   const valid = user && await bcrypt.compare(input.password, user.passwordHash);
   if (!valid) {
     throw new AppError(401, 'INVALID_CREDENTIALS', 'Email or password is incorrect');
+  }
+  if (user.status === 'pending_verification') {
+    throw new AppError(403, 'EMAIL_VERIFICATION_REQUIRED', 'Please verify your email before signing in');
   }
   if (user.status !== 'active') {
     throw new AppError(403, 'ACCOUNT_UNAVAILABLE', 'This account is not available');
@@ -115,11 +128,56 @@ async function login(input, metadata) {
     try {
       const { createNotification } = require('../notifications/notification.service');
       await createNotification({ userId: user._id, type: 'security_new_login', title: 'New sign-in detected', body: `Your SCOVRR account was just signed in from a new ${metadata?.platform || 'device'}. Review your signed-in devices if this was not you.`, data: { platform: metadata?.platform || 'unknown', signedInAt: new Date().toISOString() } });
+      await require('../email/email.events').sendUserEmail({ userId: user._id, templateKey: 'security_alert', data: { details: `A new sign-in was detected from a ${metadata?.platform || 'device'}. If this was not you, change your password and review your active sessions.` }, idempotencyKey: `security-login:${user._id}:${user.lastLoginAt.getTime()}`, metadata: { purpose: 'new_device_login', platform: metadata?.platform || 'unknown' } });
     } catch (error) {
       logger.warn('auth.security_notification.failed', { error: { name: error.name, code: error.code, message: error.message } });
     }
   }
   return publicSession(user, tokens);
+}
+
+async function completeEmailVerification(input, metadata) {
+  const user = await require('./email-verification.service').verifyChallenge(input);
+  await ensureSellerAccountType(user);
+  return publicSession(user, await createSession(user, metadata));
+}
+
+async function requestPasswordReset(email, metadata = {}) {
+  const user = await User.findOne({ email: String(email).trim().toLowerCase(), status: { $in: ['active', 'pending_verification'] } }).select('email firstName lastName');
+  if (user && env.emailEnabled) {
+    const rawToken = createOpaqueToken();
+    const token = await PasswordResetToken.create({ userId: user._id, tokenHash: hashToken(rawToken), expiresAt: new Date(Date.now() + 30 * 60_000), requestIpHash: metadata.ipAddress ? require('node:crypto').createHash('sha256').update(`${metadata.ipAddress}:${env.emailOtpPepper || env.jwtRefreshSecret}`).digest('hex') : null });
+    try {
+      await require('../email/email.service').queueEmail({ userId: user._id, toEmail: user.email, toName: `${user.firstName} ${user.lastName}`.trim(), templateKey: 'password_reset', data: { firstName: user.firstName, resetUrl: `${env.emailPublicBaseUrl}/reset-password?token=${encodeURIComponent(rawToken)}`, expiresMinutes: 30 }, idempotencyKey: `password-reset:${token._id}`, metadata: { userId: user._id.toString(), purpose: 'password_reset' } });
+    } catch (error) {
+      await PasswordResetToken.deleteOne({ _id: token._id });
+      logger.error('auth.password_reset.queue_failed', { userId: user._id.toString(), error: { name: error.name, code: error.code, message: error.message } });
+    }
+  }
+  return { accepted: true };
+}
+
+async function resetPassword(rawToken, password) {
+  const resetToken = await PasswordResetToken.findOne({ tokenHash: hashToken(rawToken), usedAt: null, expiresAt: { $gt: new Date() } }).select('+tokenHash');
+  if (!resetToken) throw new AppError(400, 'PASSWORD_RESET_INVALID', 'This password reset link is invalid or expired');
+  const claimed = await PasswordResetToken.findOneAndUpdate({ _id: resetToken._id, usedAt: null, expiresAt: { $gt: new Date() } }, { $set: { usedAt: new Date() } }, { new: true });
+  if (!claimed) throw new AppError(400, 'PASSWORD_RESET_INVALID', 'This password reset link is invalid or expired');
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  const user = await User.findOneAndUpdate({ _id: resetToken.userId, status: { $ne: 'deactivated' } }, { $set: { passwordHash, status: 'active' } }, { new: true });
+  if (!user) throw new AppError(400, 'PASSWORD_RESET_INVALID', 'This password reset link is invalid or expired');
+  await RefreshSession.updateMany({ user: user._id, revokedAt: null }, { $set: { revokedAt: new Date() } });
+  await require('../email/email.events').sendUserEmail({ userId: user._id, templateKey: 'password_changed', data: { details: 'Your password was reset successfully. All other signed-in sessions were signed out.' }, idempotencyKey: `password-changed:${user._id}:${claimed._id}`, metadata: { purpose: 'password_changed' } });
+  return { changed: true };
+}
+
+async function changePassword(userId, currentPassword, password) {
+  const user = await User.findOne({ _id: userId, status: 'active' }).select('+passwordHash');
+  if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) throw new AppError(401, 'CURRENT_PASSWORD_INVALID', 'Your current password is incorrect');
+  user.passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  await user.save();
+  await RefreshSession.updateMany({ user: user._id, revokedAt: null }, { $set: { revokedAt: new Date() } });
+  await require('../email/email.events').sendUserEmail({ userId: user._id, templateKey: 'password_changed', data: { details: 'Your password was changed successfully. All other signed-in sessions were signed out.' }, idempotencyKey: `password-changed:${user._id}:${user.updatedAt.getTime()}`, metadata: { purpose: 'password_changed' } });
+  return user;
 }
 
 async function refresh(refreshToken, metadata) {
@@ -378,4 +436,4 @@ async function deactivateAccount(userId, reason = null) {
   return user;
 }
 
-module.exports = { register, login, refresh, logout, listSessions, revokeSession, revokeOtherSessions, ensureSellerAccountType, updateProfile, updateNotificationPreferences, recordPrivacyConsent, getPrivacyConsent, getAccountLifecyclePolicy, requestAccountDeletion, getAccountDeletionRequest, cancelAccountDeletionRequest, listAccountDeletionRequests, reviewAccountDeletionRequest, exportAccountData, requestAccountExport, processAccountExport, getAccountExport, deactivateAccount, safeSessionJSON };
+module.exports = { register, login, completeEmailVerification, requestPasswordReset, resetPassword, changePassword, createSession, refresh, logout, listSessions, revokeSession, revokeOtherSessions, ensureSellerAccountType, updateProfile, updateNotificationPreferences, recordPrivacyConsent, getPrivacyConsent, getAccountLifecyclePolicy, requestAccountDeletion, getAccountDeletionRequest, cancelAccountDeletionRequest, listAccountDeletionRequests, reviewAccountDeletionRequest, exportAccountData, requestAccountExport, processAccountExport, getAccountExport, deactivateAccount, safeSessionJSON };

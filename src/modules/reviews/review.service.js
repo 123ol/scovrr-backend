@@ -40,6 +40,7 @@ async function createReview(userId, input) {
   if (existing) throw new AppError(409, 'REVIEW_ALREADY_EXISTS', 'You have already reviewed this transaction');
   const review = await Review.create({ reviewerId: userId, targetType: input.targetType, ...transaction, rating: input.rating, text: input.text || '', media: input.media || [], status: 'approved' });
   await refreshAggregates(input.targetType, input.targetId);
+  await require('../email/email.events').sendBusinessOwnerEmail({ businessId: review.businessId, templateKey: 'new_seller_review', idempotencyKey: `seller-review:${review._id}`, data: { details: `A customer left a ${review.rating}-star review for your ${input.targetType}.` }, metadata: { reviewId: review._id.toString() } });
   return review;
 }
 

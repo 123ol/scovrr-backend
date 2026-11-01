@@ -132,6 +132,7 @@ async function createBusiness(userId, input) {
   // are activated only through the verified subscription payment lifecycle.
   await entitlementService.getOrCreateBusinessSubscription(business._id);
   await require('../analytics/domain-event.service').queue('BUSINESS_CREATED', { userId, actorType: 'user', businessId: business._id, entityType: 'business', entityId: business._id, metadata: { businessId: business._id.toString(), source: 'APP' } }, `business:${business._id}:created`);
+  await require('../email/email.events').sendUserEmail({ userId, templateKey: 'seller_application_received', data: { businessName: business.name }, idempotencyKey: `seller-application:${business._id}`, metadata: { businessId: business._id.toString() } });
   return business;
 }
 
@@ -199,6 +200,12 @@ async function updateCapabilities(business, capabilities) {
     business.verification.submittedAt = null;
   }
   await business.save();
+  if (decision === 'approve') {
+    await require('../email/email.events').sendBusinessOwnerEmail({ businessId: business._id, templateKey: 'business_verification_approved', idempotencyKey: `business-verification:${business._id}:approved`, data: { details: 'Your business verification was approved and your seller workspace is ready.' } });
+    await require('../email/email.events').sendBusinessOwnerEmail({ businessId: business._id, templateKey: 'seller_activated', idempotencyKey: `seller-activated:${business._id}`, data: { details: 'Your seller account is now active. You can publish and manage your SCOVRR catalogue.' } });
+  } else if (decision === 'reject') {
+    await require('../email/email.events').sendBusinessOwnerEmail({ businessId: business._id, templateKey: 'business_verification_rejected', idempotencyKey: `business-verification:${business._id}:rejected:${business.verification.reviewedAt.getTime()}`, data: { details: details.reason || 'Please review the verification feedback and submit the requested information.' } });
+  }
   return business;
 }
 

@@ -117,6 +117,8 @@ async function transition({ businessId, deliveryId, actorId, action, pickupCodeV
     } catch (error) {
       logger.warn('delivery.notification.failed', { deliveryId: delivery._id.toString(), error: { name: error.name, code: error.code, message: error.message } });
     }
+    const deliveryEmailTemplate = orderStatus === 'delivered' ? 'order_delivered' : orderStatus === 'out_for_delivery' ? 'order_shipped' : null;
+    if (deliveryEmailTemplate) await require('../email/email.events').sendOrderEmail(order, deliveryEmailTemplate, delivery.status);
   }
   return delivery;
 }

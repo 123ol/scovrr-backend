@@ -15,6 +15,7 @@ function singleFlight(task) {
 const handlers = {
   notification_push: async (payload) => require('../modules/notifications/notification-delivery.service').deliverNotification(payload.notificationId),
   notification_receipts: async () => require('../modules/notifications/notification-delivery.service').processReceipts(),
+  email_send: async (payload) => require('../modules/email/email.service').sendEmailDelivery(payload.emailDeliveryId),
   account_export: async (payload) => require('../modules/auth/auth.service').processAccountExport(payload.exportJobId),
   product_import: async (payload) => require('../modules/products/product-import.service').processCsvImport(payload.productImportJobId),
   payout_scan: async () => require('../modules/payouts/payout.service').runEligiblePayouts(),

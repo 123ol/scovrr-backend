@@ -51,6 +51,16 @@ const env = Object.freeze({
   mongooseAutoIndex: indexDefaults.autoIndex,
   mongooseAutoCreate: indexDefaults.autoCreate,
   expoAccessToken: process.env.EXPO_ACCESS_TOKEN || '',
+  emailEnabled: toBoolean(process.env.EMAIL_ENABLED),
+  resendApiKey: process.env.RESEND_API_KEY || '',
+  resendFromEmail: process.env.RESEND_FROM_EMAIL || '',
+  resendFromName: process.env.RESEND_FROM_NAME || 'SCOVRR',
+  resendSecurityEmail: process.env.RESEND_SECURITY_EMAIL || '',
+  resendSellerEmail: process.env.RESEND_SELLER_EMAIL || '',
+  resendSupportEmail: process.env.RESEND_SUPPORT_EMAIL || '',
+  resendWebhookSecret: process.env.RESEND_WEBHOOK_SECRET || '',
+  emailPublicBaseUrl: process.env.EMAIL_PUBLIC_BASE_URL || '',
+  emailOtpPepper: process.env.EMAIL_OTP_PEPPER || '',
   mediaProvider: process.env.MEDIA_PROVIDER || '',
   cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
   cloudinaryApiKey: process.env.CLOUDINARY_API_KEY || '',
@@ -117,6 +127,9 @@ function assertRuntimeConfig() {
     }
     if (env.mediaProvider !== 'cloudinary' || !env.cloudinaryCloudName || !env.cloudinaryApiKey || !env.cloudinaryApiSecret) {
       throw new Error('MEDIA_PROVIDER=cloudinary and Cloudinary credentials must be configured in production before accepting catalogue uploads');
+    }
+    if (env.emailEnabled && (!env.resendApiKey || !env.resendFromEmail || !env.emailOtpPepper || !env.emailPublicBaseUrl)) {
+      throw new Error('RESEND_API_KEY, RESEND_FROM_EMAIL, EMAIL_OTP_PEPPER, and EMAIL_PUBLIC_BASE_URL must be configured when EMAIL_ENABLED=true');
     }
   }
 }

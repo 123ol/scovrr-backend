@@ -3,19 +3,25 @@ const rateLimit = require('express-rate-limit');
 const { validate } = require('../../common/validation/validate');
 const { requireAuth } = require('../../middleware/auth');
 const controller = require('./auth.controller');
-const { registerSchema, loginSchema, refreshSchema, profileUpdateSchema, preferenceUpdateSchema, privacyConsentSchema, privacyConsentReadSchema, deactivateSchema, sessionIdSchema, sessionsSchema, exportJobIdSchema, deletionRequestSchema, lifecyclePolicySchema } = require('./auth.validation');
+const { registerSchema, loginSchema, emailVerificationSchema, emailVerificationResendSchema, passwordResetRequestSchema, passwordResetConfirmSchema, passwordChangeSchema, refreshSchema, profileUpdateSchema, preferenceUpdateSchema, privacyConsentSchema, privacyConsentReadSchema, deactivateSchema, sessionIdSchema, sessionsSchema, exportJobIdSchema, deletionRequestSchema, lifecyclePolicySchema } = require('./auth.validation');
 
 const router = express.Router();
 const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1_000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1_000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false });
 const refreshLimiter = rateLimit({ windowMs: 15 * 60 * 1_000, limit: 60, standardHeaders: 'draft-8', legacyHeaders: false });
+const verificationLimiter = rateLimit({ windowMs: 15 * 60 * 1_000, limit: 15, standardHeaders: 'draft-8', legacyHeaders: false });
 
 router.post('/register', registerLimiter, validate(registerSchema), controller.register);
 router.post('/login', loginLimiter, validate(loginSchema), controller.login);
+router.post('/verify-email', verificationLimiter, validate(emailVerificationSchema), controller.verifyEmail);
+router.post('/verify-email/resend', verificationLimiter, validate(emailVerificationResendSchema), controller.resendEmailVerification);
+router.post('/password-reset/request', verificationLimiter, validate(passwordResetRequestSchema), controller.requestPasswordReset);
+router.post('/password-reset/confirm', verificationLimiter, validate(passwordResetConfirmSchema), controller.resetPassword);
 router.post('/refresh', refreshLimiter, validate(refreshSchema), controller.refresh);
 router.post('/logout', requireAuth, controller.logout);
 router.get('/me', requireAuth, controller.me);
 router.patch('/me', requireAuth, validate(profileUpdateSchema), controller.updateProfile);
+router.post('/me/password', requireAuth, verificationLimiter, validate(passwordChangeSchema), controller.changePassword);
 router.patch('/me/preferences', requireAuth, validate(preferenceUpdateSchema), controller.updatePreferences);
 router.post('/me/privacy-consent', requireAuth, validate(privacyConsentSchema), controller.recordPrivacyConsent);
 router.get('/me/privacy-consent', requireAuth, validate(privacyConsentReadSchema), controller.getPrivacyConsent);

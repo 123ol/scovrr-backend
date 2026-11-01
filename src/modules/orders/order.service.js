@@ -206,6 +206,7 @@ async function cancelPendingOrder(userId, orderId) {
   order.timeline.push({ status: 'cancelled', actorId: userId, note: 'Pending checkout cancelled.' });
   await order.save();
   await require('../analytics/domain-event.service').queue('ORDER_CANCELLED', { userId, actorType: 'user', businessId: order.businessIds[0], locationId: order.fulfillmentLocationId, entityType: 'order', entityId: order._id, metadata: { orderId: order._id.toString(), amountMinor: order.totalMinor, currency: order.currency, reason: order.cancellation.reason } }, `order:${order._id}:cancelled`);
+  await require('../email/email.events').sendOrderEmail(order, 'order_cancelled', 'customer-cancelled', { details: order.cancellation.reason });
   return order;
 }
 
@@ -247,6 +248,9 @@ async function transitionBusinessOrder({ businessId, orderId, actorId, action, m
   await order.save();
   if (action === 'cancel') await inventoryService.releaseOrderReservations(order._id, actorId, reason || 'Business cancelled order');
   if (action === 'cancel') await require('../analytics/domain-event.service').queue('ORDER_CANCELLED', { actorId, actorType: 'user', businessId, locationId: order.fulfillmentLocationId, entityType: 'order', entityId: order._id, metadata: { orderId: order._id.toString(), amountMinor: order.totalMinor, currency: order.currency, reason: reason || 'Business cancelled order' } }, `order:${order._id}:cancelled`);
+  const orderEmailEvents = require('../email/email.events');
+  if (rule.to === 'confirmed') await orderEmailEvents.sendOrderEmail(order, 'order_confirmation', 'seller-confirmed');
+  if (rule.to === 'cancelled') await orderEmailEvents.sendOrderEmail(order, 'order_cancelled', 'cancelled', { details: reason || 'The seller cancelled this order.' });
   return order;
 }
 
