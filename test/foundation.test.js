@@ -7,7 +7,7 @@ const { sendSuccess } = require('../src/common/http/response');
 const authService = require('../src/modules/auth/auth.service');
 const { User } = require('../src/modules/users/user.model');
 const { normalizePhone } = require('../src/common/phone');
-const { isPublicReadPath, shouldCachePublicResponse } = require('../src/common/http/public-cache');
+const { isPublicReadPath, shouldCachePublicResponse, shouldNotStoreResponse } = require('../src/common/http/public-cache');
 
 test('registration schema rejects invalid input with field-level issues', () => {
   const result = registerSchema.safeParse({
@@ -93,6 +93,8 @@ test('public cache boundary excludes authenticated and private reads', () => {
   assert.equal(isPublicReadPath('/api/v1/businesses/mine'), false);
   assert.equal(shouldCachePublicResponse({ method: 'GET', path: '/api/v1/products/blue-dress', get: () => undefined }), true);
   assert.equal(shouldCachePublicResponse({ method: 'GET', path: '/api/v1/products/blue-dress', get: () => 'Bearer token' }), false);
+  assert.equal(shouldNotStoreResponse({ method: 'GET', path: '/api/v1/admin/me', get: () => undefined }), true);
+  assert.equal(shouldNotStoreResponse({ method: 'POST', path: '/api/v1/auth/login', get: () => undefined }), false);
 });
 
 test('login keeps new-device security notification non-blocking', () => {

@@ -1,11 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 
 const { TEMPLATE_DEFINITIONS, renderEmailTemplate, escapeHtml } = require('../src/modules/email/email.templates');
 const { generateOtp, hashOtp, matchesOtp, OTP_TTL_MS, RESEND_COOLDOWN_MS, MAX_ATTEMPTS } = require('../src/modules/auth/email-verification.service');
 const { EmailDelivery } = require('../src/modules/email/email-delivery.model');
 const { EmailVerificationChallenge } = require('../src/modules/auth/email-verification.model');
-const emailService = require('../src/modules/email/email.service');
 const resendProvider = require('../src/integrations/email/resend.provider');
 
 test('all approved email templates render branded HTML and plain text', () => {
@@ -54,8 +54,8 @@ test('email delivery and verification models protect sensitive fields and expose
 });
 
 test('email sending stays disabled without explicit provider configuration', async () => {
-  const result = await emailService.queueEmail({ toEmail: 'test@example.com', templateKey: 'welcome', idempotencyKey: 'test-email-disabled' });
-  assert.deepEqual(result, { queued: false, reason: 'EMAIL_DISABLED' });
+  const output = execFileSync(process.execPath, ['-e', "require('./src/modules/email/email.service').queueEmail({ toEmail: 'test@example.com', templateKey: 'welcome', idempotencyKey: 'test-email-disabled' }).then((result) => process.stdout.write(JSON.stringify(result))).catch((error) => { process.stderr.write(error.stack); process.exit(1); });"], { cwd: process.cwd(), env: { ...process.env, EMAIL_ENABLED: 'false' }, encoding: 'utf8' });
+  assert.deepEqual(JSON.parse(output), { queued: false, reason: 'EMAIL_DISABLED' });
 });
 
 test('Resend adapter can be mocked without network access', async () => {
