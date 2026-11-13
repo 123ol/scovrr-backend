@@ -54,7 +54,7 @@ async function issueChallenge(user, { requestIp, resendCount = 0, resendWindowSt
     requestIpHash: requestIp ? hashRequestIp(requestIp) : null
   });
   try {
-    await emailService.queueEmail({
+    const delivery = await emailService.queueEmail({
       userId: user._id,
       toEmail: user.email,
       toName: `${user.firstName} ${user.lastName}`.trim(),
@@ -63,6 +63,12 @@ async function issueChallenge(user, { requestIp, resendCount = 0, resendWindowSt
       idempotencyKey: `email-otp:${user._id}:${challenge._id}`,
       metadata: { purpose: 'registration', userId: user._id.toString() }
     });
+    // Vercel functions do not keep the background job worker alive after the
+    // request finishes. Send security-critical OTP mail before responding;
+    // the queued job remains as an idempotent retry/fallback.
+    if (delivery?.queued && delivery.deliveryId) {
+      await emailService.sendEmailDelivery(delivery.deliveryId);
+    }
   } catch (error) {
     await EmailVerificationChallenge.deleteOne({ _id: challenge._id });
     throw error;
